@@ -1,0 +1,7 @@
+# Ignore python-dotenv environment file
+.env
+
+# Ignore data files
+data/
+tmp/
+waste/
