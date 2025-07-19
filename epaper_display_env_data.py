@@ -214,6 +214,24 @@ def handle_mqtt_message_received(client, userdata, message):
                     # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
                     if new_thi is not None and new_thi != current_thi_value:
                         thi_value_last_changed_timestamp = received_timestamp
+
+                                            # --- ▼▼▼ ここからが修正箇所です ▼▼▼ ---
+                    # 受信した新しい値でグローバル変数を更新
+                    current_thi_value = new_thi
+                    thi_data_last_received_timestamp = received_timestamp
+                    thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
+                    
+                    # ファイルに保存
+                    save_data_to_json_file(
+                        THI_DATA_FILE_PATH, 
+                        {
+                            "thi": current_thi_value, 
+                            "timestamp": thi_data_source_timestamp, 
+                            "last_update": thi_data_last_received_timestamp, 
+                            "last_changed_timestamp": thi_value_last_changed_timestamp
+                        }
+                    )
+                    
                     logger.info(f"MQTT THI data received: {current_thi_value}")
 
     except Exception as e:
