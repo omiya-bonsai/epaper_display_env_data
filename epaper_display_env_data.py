@@ -213,11 +213,7 @@ def handle_mqtt_message_received(client, userdata, message):
                     new_thi = payload_dict.get("thi")
                     # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
                     if new_thi is not None and new_thi != current_thi_value:
-                        thi_value_last_changed_timestamp = received_times[118;1:3utamp
-                    current_thi_value = new_thi
-                    thi_data_last_received_timestamp = received_timestamp
-                    thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(THI_DATA_FILE_PATH, {"thi": current_thi_value, "timestamp": thi_data_source_timestamp, "last_update": thi_data_last_received_timestamp, "last_changed_timestamp": thi_value_last_changed_timestamp})
+                        thi_value_last_changed_timestamp = received_times
                     logger.info(f"MQTT THI data received: {current_thi_value}")
 
     except Exception as e:
