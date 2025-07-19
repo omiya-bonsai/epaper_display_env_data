@@ -3,7 +3,7 @@
 
 # =========================================================================
 #
-#                         スクリプトの概要
+#                               スクリプトの概要
 #
 # =========================================================================
 #
@@ -55,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 # データの鮮度チェック用：この秒数以上更新がないデータは「古い」と判断する
 DATA_STALENESS_THRESHOLD_SECONDS = int(os.getenv('DATA_STALENESS_THRESHOLD_SECONDS', 5400))
+# ▼▼▼ 修正: 値が変化しない場合にエラーと判断するまでの秒数（60分） ▼▼▼
+NO_CHANGE_ERROR_THRESHOLD_SECONDS = 3600
 
 # MQTTブローカーの接続情報
 MQTT_BROKER_IP_ADDRESS = os.getenv('MQTT_BROKER_IP_ADDRESS', "localhost")
@@ -81,23 +83,35 @@ THI_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'thi_data.json')
 # --- グローバル変数（プログラムのどこからでもアクセスできる変数）の定義 ---
 current_mqtt_qzss_cpu_temperature: Optional[float] = None
 mqtt_qzss_cpu_last_received_timestamp: Optional[float] = None
+# ▼▼▼ 修正: 値の最終変化時刻を記録する変数を追加 ▼▼▼
+mqtt_qzss_cpu_last_changed_timestamp: Optional[float] = None
 
 current_pi_cpu_temperature: Optional[float] = None
 pi_cpu_last_received_timestamp: Optional[float] = None
+# ▼▼▼ 修正: 値の最終変化時刻を記録する変数を追加 ▼▼▼
+pi_cpu_last_changed_timestamp: Optional[float] = None
 
 current_environment_temperature: Optional[float] = None
 environment_temperature_last_received_timestamp: Optional[float] = None
+# ▼▼▼ 修正: 値の最終変化時刻を記録する変数を追加 ▼▼▼
+environment_temperature_last_changed_timestamp: Optional[float] = None
 
 current_environment_humidity: Optional[float] = None
 environment_humidity_last_received_timestamp: Optional[float] = None
+# ▼▼▼ 修正: 値の最終変化時刻を記録する変数を追加 ▼▼▼
+environment_humidity_last_changed_timestamp: Optional[float] = None
 
 current_co2_concentration: Optional[float] = None
 co2_data_last_received_timestamp: Optional[float] = None
 co2_data_source_timestamp: Optional[float] = None
+# ▼▼▼ 修正: 値の最終変化時刻を記録する変数を追加 ▼▼▼
+co2_concentration_last_changed_timestamp: Optional[float] = None
 
 current_thi_value: Optional[float] = None
 thi_data_last_received_timestamp: Optional[float] = None
 thi_data_source_timestamp: Optional[float] = None
+# ▼▼▼ 修正: 値の最終変化時刻を記録する変数を追加 ▼▼▼
+thi_value_last_changed_timestamp: Optional[float] = None
 
 data_lock = threading.Lock()
 
@@ -119,12 +133,12 @@ def handle_mqtt_connection(client, userdata, flags, result_code):
 
 def handle_mqtt_message_received(client, userdata, message):
     """MQTTメッセージを受信したときに自動的に呼び出される関数"""
-    global current_mqtt_qzss_cpu_temperature, mqtt_qzss_cpu_last_received_timestamp
-    global current_pi_cpu_temperature, pi_cpu_last_received_timestamp
-    global current_environment_temperature, environment_temperature_last_received_timestamp
-    global current_environment_humidity, environment_humidity_last_received_timestamp
-    global current_co2_concentration, co2_data_last_received_timestamp, co2_data_source_timestamp
-    global current_thi_value, thi_data_last_received_timestamp, thi_data_source_timestamp
+    global current_mqtt_qzss_cpu_temperature, mqtt_qzss_cpu_last_received_timestamp, mqtt_qzss_cpu_last_changed_timestamp
+    global current_pi_cpu_temperature, pi_cpu_last_received_timestamp, pi_cpu_last_changed_timestamp
+    global current_environment_temperature, environment_temperature_last_received_timestamp, environment_temperature_last_changed_timestamp
+    global current_environment_humidity, environment_humidity_last_received_timestamp, environment_humidity_last_changed_timestamp
+    global current_co2_concentration, co2_data_last_received_timestamp, co2_data_source_timestamp, co2_concentration_last_changed_timestamp
+    global current_thi_value, thi_data_last_received_timestamp, thi_data_source_timestamp, thi_value_last_changed_timestamp
 
     received_timestamp = time.time()
 
@@ -138,46 +152,72 @@ def handle_mqtt_message_received(client, userdata, message):
 
             if message.topic == MQTT_TOPIC_QZSS_CPU_TEMP:
                 payload_dict = json.loads(payload_str)
-                current_mqtt_qzss_cpu_temperature = payload_dict.get("temperature")
+                new_temp = payload_dict.get("temperature")
+                # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
+                if new_temp is not None and new_temp != current_mqtt_qzss_cpu_temperature:
+                    mqtt_qzss_cpu_last_changed_timestamp = received_timestamp
+                current_mqtt_qzss_cpu_temperature = new_temp
                 mqtt_qzss_cpu_last_received_timestamp = received_timestamp
-                save_data_to_json_file(QZSS_TEMPERATURE_FILE_PATH, {"temperature": current_mqtt_qzss_cpu_temperature, "timestamp": received_timestamp})
+                save_data_to_json_file(QZSS_TEMPERATURE_FILE_PATH, {"temperature": current_mqtt_qzss_cpu_temperature, "timestamp": received_timestamp, "last_changed_timestamp": mqtt_qzss_cpu_last_changed_timestamp})
                 logger.info(f"MQTT QZSS CPU temperature received: {current_mqtt_qzss_cpu_temperature}°C")
 
             elif message.topic == MQTT_TOPIC_PI_CPU_TEMP:
                 match = re.search(r"temp=(\d+\.?\d*)", payload_str)
                 if match:
-                    current_pi_cpu_temperature = float(match.group(1))
+                    new_temp = float(match.group(1))
+                    # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
+                    if new_temp != current_pi_cpu_temperature:
+                        pi_cpu_last_changed_timestamp = received_timestamp
+                    current_pi_cpu_temperature = new_temp
                     pi_cpu_last_received_timestamp = received_timestamp
-                    save_data_to_json_file(PI_TEMPERATURE_FILE_PATH, {"temperature": current_pi_cpu_temperature, "timestamp": received_timestamp})
+                    save_data_to_json_file(PI_TEMPERATURE_FILE_PATH, {"temperature": current_pi_cpu_temperature, "timestamp": received_timestamp, "last_changed_timestamp": pi_cpu_last_changed_timestamp})
                     logger.info(f"MQTT Pi CPU temperature received: {current_pi_cpu_temperature}°C")
 
             elif message.topic == MQTT_TOPIC_ENV4:
                 payload_dict = json.loads(payload_str)
-                current_environment_temperature = payload_dict.get("temperature")
+                
+                new_temp = payload_dict.get("temperature")
+                # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
+                if new_temp is not None and new_temp != current_environment_temperature:
+                    environment_temperature_last_changed_timestamp = received_timestamp
+                current_environment_temperature = new_temp
                 environment_temperature_last_received_timestamp = received_timestamp
-                save_data_to_json_file(ENVIRONMENT_TEMPERATURE_FILE_PATH, {"temperature": current_environment_temperature, "timestamp": received_timestamp})
+                save_data_to_json_file(ENVIRONMENT_TEMPERATURE_FILE_PATH, {"temperature": current_environment_temperature, "timestamp": received_timestamp, "last_changed_timestamp": environment_temperature_last_changed_timestamp})
 
-                current_environment_humidity = payload_dict.get("humidity")
+                new_humidity = payload_dict.get("humidity")
+                # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
+                if new_humidity is not None and new_humidity != current_environment_humidity:
+                    environment_humidity_last_changed_timestamp = received_timestamp
+                current_environment_humidity = new_humidity
                 environment_humidity_last_received_timestamp = received_timestamp
-                save_data_to_json_file(ENVIRONMENT_HUMIDITY_FILE_PATH, {"humidity": current_environment_humidity, "timestamp": received_timestamp})
+                save_data_to_json_file(ENVIRONMENT_HUMIDITY_FILE_PATH, {"humidity": current_environment_humidity, "timestamp": received_timestamp, "last_changed_timestamp": environment_humidity_last_changed_timestamp})
+                
                 logger.info(f"MQTT environment data received - Temperature: {current_environment_temperature}°C, Humidity: {current_environment_humidity}%")
 
             elif message.topic == MQTT_TOPIC_CO2_DATA:
                 payload_dict = json.loads(payload_str)
                 if payload_dict.get("device_id") == "pico_w_production":
-                    current_co2_concentration = payload_dict.get("co2")
+                    new_co2 = payload_dict.get("co2")
+                    # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
+                    if new_co2 is not None and new_co2 != current_co2_concentration:
+                        co2_concentration_last_changed_timestamp = received_timestamp
+                    current_co2_concentration = new_co2
                     co2_data_last_received_timestamp = received_timestamp
                     co2_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(CO2_DATA_FILE_PATH, {"co2": current_co2_concentration, "timestamp": co2_data_source_timestamp, "last_update": co2_data_last_received_timestamp})
+                    save_data_to_json_file(CO2_DATA_FILE_PATH, {"co2": current_co2_concentration, "timestamp": co2_data_source_timestamp, "last_update": co2_data_last_received_timestamp, "last_changed_timestamp": co2_concentration_last_changed_timestamp})
                     logger.info(f"MQTT CO2 concentration received: {current_co2_concentration} ppm")
 
             elif message.topic == MQTT_TOPIC_SENSOR_DATA:
                 payload_dict = json.loads(payload_str)
                 if payload_dict.get("device_id") == "pico_w_production":
-                    current_thi_value = payload_dict.get("thi")
+                    new_thi = payload_dict.get("thi")
+                    # ▼▼▼ 修正: 値が変化したら最終変化時刻を更新 ▼▼▼
+                    if new_thi is not None and new_thi != current_thi_value:
+                        thi_value_last_changed_timestamp = received_times[118;1:3utamp
+                    current_thi_value = new_thi
                     thi_data_last_received_timestamp = received_timestamp
                     thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(THI_DATA_FILE_PATH, {"thi": current_thi_value, "timestamp": thi_data_source_timestamp, "last_update": thi_data_last_received_timestamp})
+                    save_data_to_json_file(THI_DATA_FILE_PATH, {"thi": current_thi_value, "timestamp": thi_data_source_timestamp, "last_update": thi_data_last_received_timestamp, "last_changed_timestamp": thi_value_last_changed_timestamp})
                     logger.info(f"MQTT THI data received: {current_thi_value}")
 
     except Exception as e:
@@ -211,7 +251,12 @@ def load_saved_all_mqtt_data():
     保存されたデータを復元する。
     戻り値: bool - どのデータも復元できなかった場合にTrue（＝初期状態）を返す。
     """
-    global current_mqtt_qzss_cpu_temperature, mqtt_qzss_cpu_last_received_timestamp, current_pi_cpu_temperature, pi_cpu_last_received_timestamp, current_environment_temperature, environment_temperature_last_received_timestamp, current_environment_humidity, environment_humidity_last_received_timestamp, current_co2_concentration, co2_data_last_received_timestamp, co2_data_source_timestamp, current_thi_value, thi_data_last_received_timestamp, thi_data_source_timestamp
+    global current_mqtt_qzss_cpu_temperature, mqtt_qzss_cpu_last_received_timestamp, mqtt_qzss_cpu_last_changed_timestamp
+    global current_pi_cpu_temperature, pi_cpu_last_received_timestamp, pi_cpu_last_changed_timestamp
+    global current_environment_temperature, environment_temperature_last_received_timestamp, environment_temperature_last_changed_timestamp
+    global current_environment_humidity, environment_humidity_last_received_timestamp, environment_humidity_last_changed_timestamp
+    global current_co2_concentration, co2_data_last_received_timestamp, co2_data_source_timestamp, co2_concentration_last_changed_timestamp
+    global current_thi_value, thi_data_last_received_timestamp, thi_data_source_timestamp, thi_value_last_changed_timestamp
 
     os.makedirs(BASE_DIRECTORY, exist_ok=True)
     data_was_loaded = False
@@ -222,6 +267,8 @@ def load_saved_all_mqtt_data():
             if loaded_data:
                 current_mqtt_qzss_cpu_temperature = loaded_data.get("temperature")
                 mqtt_qzss_cpu_last_received_timestamp = loaded_data.get("timestamp")
+                # ▼▼▼ 修正: 最終変化時刻も復元 ▼▼▼
+                mqtt_qzss_cpu_last_changed_timestamp = loaded_data.get("last_changed_timestamp", mqtt_qzss_cpu_last_received_timestamp)
                 logger.info(f"QZSS CPU temperature restored: {current_mqtt_qzss_cpu_temperature}°C")
                 data_was_loaded = True
     except Exception as e:
@@ -233,6 +280,8 @@ def load_saved_all_mqtt_data():
             if loaded_data:
                 current_pi_cpu_temperature = loaded_data.get("temperature")
                 pi_cpu_last_received_timestamp = loaded_data.get("timestamp")
+                # ▼▼▼ 修正: 最終変化時刻も復元 ▼▼▼
+                pi_cpu_last_changed_timestamp = loaded_data.get("last_changed_timestamp", pi_cpu_last_received_timestamp)
                 logger.info(f"Pi CPU temperature restored: {current_pi_cpu_temperature}°C")
                 data_was_loaded = True
     except Exception as e:
@@ -244,6 +293,8 @@ def load_saved_all_mqtt_data():
             if loaded_data:
                 current_environment_temperature = loaded_data.get("temperature")
                 environment_temperature_last_received_timestamp = loaded_data.get("timestamp")
+                # ▼▼▼ 修正: 最終変化時刻も復元 ▼▼▼
+                environment_temperature_last_changed_timestamp = loaded_data.get("last_changed_timestamp", environment_temperature_last_received_timestamp)
                 logger.info(f"Environment temperature restored: {current_environment_temperature}°C")
                 data_was_loaded = True
     except Exception as e:
@@ -255,6 +306,8 @@ def load_saved_all_mqtt_data():
             if loaded_data:
                 current_environment_humidity = loaded_data.get("humidity")
                 environment_humidity_last_received_timestamp = loaded_data.get("timestamp")
+                # ▼▼▼ 修正: 最終変化時刻も復元 ▼▼▼
+                environment_humidity_last_changed_timestamp = loaded_data.get("last_changed_timestamp", environment_humidity_last_received_timestamp)
                 logger.info(f"Environment humidity restored: {current_environment_humidity}%")
                 data_was_loaded = True
     except Exception as e:
@@ -267,6 +320,8 @@ def load_saved_all_mqtt_data():
                 current_co2_concentration = loaded_data.get("co2")
                 co2_data_source_timestamp = loaded_data.get("timestamp")
                 co2_data_last_received_timestamp = loaded_data.get("last_update")
+                # ▼▼▼ 修正: 最終変化時刻も復元 ▼▼▼
+                co2_concentration_last_changed_timestamp = loaded_data.get("last_changed_timestamp", co2_data_last_received_timestamp)
                 logger.info(f"CO2 concentration restored: {current_co2_concentration} ppm")
                 data_was_loaded = True
     except Exception as e:
@@ -279,6 +334,8 @@ def load_saved_all_mqtt_data():
                 current_thi_value = loaded_data.get("thi")
                 thi_data_source_timestamp = loaded_data.get("timestamp")
                 thi_data_last_received_timestamp = loaded_data.get("last_update")
+                # ▼▼▼ 修正: 最終変化時刻も復元 ▼▼▼
+                thi_value_last_changed_timestamp = loaded_data.get("last_changed_timestamp", thi_data_last_received_timestamp)
                 logger.info(f"THI restored: {current_thi_value}")
                 data_was_loaded = True
     except Exception as e:
@@ -369,36 +426,43 @@ class EnvironmentalDataDisplaySystem:
         }
 
         self.display_item_definitions = [
-            ("Temperature", "Temp:", "current_environment_temperature", "°C", "{:5.1f}"),
-            ("Humidity", "Hum:", "current_environment_humidity", "%", "{:5.1f}"),
-            ("QZSS_CPU", "QZSS:", "current_mqtt_qzss_cpu_temperature", "°C", "{:5.1f}"),
-            ("Pi_CPU", "Pi5:", "current_pi_cpu_temperature", "°C", "{:5.1f}"),
-            ("THI_CO2", "THI:", "combined_thi_co2", "", "combined")
+            ("Temperature", "Temp:", "current_environment_temperature", "environment_temperature_last_changed_timestamp", "°C", "{:5.1f}"),
+            ("Humidity", "Hum:", "current_environment_humidity", "environment_humidity_last_changed_timestamp", "%", "{:5.1f}"),
+            ("QZSS_CPU", "QZSS:", "current_mqtt_qzss_cpu_temperature", "mqtt_qzss_cpu_last_changed_timestamp", "°C", "{:5.1f}"),
+            ("Pi_CPU", "Pi5:", "current_pi_cpu_temperature", "pi_cpu_last_changed_timestamp", "°C", "{:5.1f}"),
+            ("THI_CO2", "THI:", "combined_thi_co2", "", "", "")
         ]
 
     def _extract_sensor_value_from_data(self, data_path: str) -> Optional[float]:
         with data_lock:
-            if data_path == "current_environment_temperature":
-                return current_environment_temperature
-            elif data_path == "current_environment_humidity":
-                return current_environment_humidity
-            elif data_path == "current_mqtt_qzss_cpu_temperature":
-                return current_mqtt_qzss_cpu_temperature
-            elif data_path == "current_pi_cpu_temperature":
-                return current_pi_cpu_temperature
-            return None
+            # globals() を使って動的にグローバル変数の値を取得
+            return globals().get(data_path)
 
     def _get_combined_thi_and_co2_data(self, display_label: str) -> str:
         with data_lock:
             is_thi_data_error = False
             is_co2_data_error = False
-            if current_thi_value is None or thi_data_last_received_timestamp is None or time.time() - thi_data_last_received_timestamp >= DATA_STALENESS_THRESHOLD_SECONDS:
+
+            # ▼▼▼ 修正: エラー判定条件を追加 ▼▼▼
+            # 1. データ自体がない (None)
+            # 2. 最終受信から一定時間経過 (DATA_STALENESS_THRESHOLD_SECONDS)
+            # 3. 値が一定時間変化していない (NO_CHANGE_ERROR_THRESHOLD_SECONDS)
+            
+            # THIのエラーチェック
+            thi_stale_by_no_receive = thi_data_last_received_timestamp is None or time.time() - thi_data_last_received_timestamp >= DATA_STALENESS_THRESHOLD_SECONDS
+            thi_stale_by_no_change = thi_value_last_changed_timestamp is None or time.time() - thi_value_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS
+            if current_thi_value is None or thi_stale_by_no_receive or thi_stale_by_no_change:
                 is_thi_data_error = True
-            if current_co2_concentration is None or co2_data_last_received_timestamp is None or time.time() - co2_data_last_received_timestamp >= DATA_STALENESS_THRESHOLD_SECONDS:
+
+            # CO2のエラーチェック
+            co2_stale_by_no_receive = co2_data_last_received_timestamp is None or time.time() - co2_data_last_received_timestamp >= DATA_STALENESS_THRESHOLD_SECONDS
+            co2_stale_by_no_change = co2_concentration_last_changed_timestamp is None or time.time() - co2_concentration_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS
+            if current_co2_concentration is None or co2_stale_by_no_receive or co2_stale_by_no_change:
                 is_co2_data_error = True
 
+            # 表示文字列の生成
             if is_thi_data_error and is_co2_data_error:
-                return f"{display_label}ERROR"
+                return f"{display_label}ERROR / CO2:ERROR"
             elif is_thi_data_error:
                 return f"{display_label}ERROR / CO2:{current_co2_concentration:.0f}ppm"
             elif is_co2_data_error:
@@ -443,7 +507,8 @@ class EnvironmentalDataDisplaySystem:
         else:
             # --- 通常時のセンサーデータ表示 ---
             layout = DisplayLayoutManager(*image_size)
-            for i, (key, label, path, unit, fmt) in enumerate(self.display_item_definitions):
+            # ▼▼▼ 修正: display_item_definitions のアンパックを変更 ▼▼▼
+            for i, (key, label, path, last_changed_ts_path, unit, fmt) in enumerate(self.display_item_definitions):
                 y_pos = i * layout.single_section_height
                 gauge_y = y_pos + (layout.single_section_height - layout.gauge_bar_height) // 2
 
@@ -451,7 +516,12 @@ class EnvironmentalDataDisplaySystem:
                     text = self._get_combined_thi_and_co2_data(label)
                 else:
                     value = self._extract_sensor_value_from_data(path)
-                    if value is None:
+                    last_changed_ts = self._extract_sensor_value_from_data(last_changed_ts_path)
+
+                    # ▼▼▼ 修正: 値が変化しない場合のエラー判定を追加 ▼▼▼
+                    is_stale_by_no_change = (last_changed_ts is not None and time.time() - last_changed_ts > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
+                    
+                    if value is None or is_stale_by_no_change:
                         text = f"{label}ERROR"
                     else:
                         text = f"{label}{fmt.format(value)}{unit}"
