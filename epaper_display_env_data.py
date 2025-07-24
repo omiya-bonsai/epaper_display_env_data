@@ -191,7 +191,6 @@ def handle_mqtt_message_received(client, userdata, message):
                 current_environment_humidity = new_humidity
                 environment_humidity_last_received_timestamp = received_timestamp
                 save_data_to_json_file(ENVIRONMENT_HUMIDITY_FILE_PATH, {"humidity": current_environment_humidity, "timestamp": received_timestamp, "last_changed_timestamp": environment_humidity_last_changed_timestamp})
-                
                 logger.info(f"MQTT environment data received - Temperature: {current_environment_temperature}°C, Humidity: {current_environment_humidity}%")
 
             elif message.topic == MQTT_TOPIC_CO2_DATA:
@@ -215,14 +214,14 @@ def handle_mqtt_message_received(client, userdata, message):
                     if new_thi is not None and new_thi != current_thi_value:
                         thi_value_last_changed_timestamp = received_timestamp
 
-                                            # --- ▼▼▼ ここからが修正箇所です ▼▼▼ ---
-                    # 受信した新しい値でグローバル変数を更新
-                    current_thi_value = new_thi
-                    thi_data_last_received_timestamp = received_timestamp
-                    thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    
-                    # ファイルに保存
-                    save_data_to_json_file(
+                        # --- ▼▼▼ ここからが修正箇所です ▼▼▼ ---
+                        # 受信した新しい値でグローバル変数を更新
+                        current_thi_value = new_thi
+                        thi_data_last_received_timestamp = received_timestamp
+                        thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
+                        
+                        # ファイルに保存
+                        save_data_to_json_file(
                         THI_DATA_FILE_PATH, 
                         {
                             "thi": current_thi_value, 
