@@ -432,7 +432,7 @@ class EnvironmentalDataDisplaySystem:
             logger.warning("e-Paper display not available (test mode)")
 
         self.sensor_gauge_ranges = {
-            "Temperature": SensorGaugeRange(-10.0, 40.0, "°C"),
+            "Temperature": SensorGaugeRange(-10.0, 50.0, "°C"),
             "Humidity": SensorGaugeRange(0.0, 100.0, "%"),
             "QZSS_CPU": SensorGaugeRange(30.0, 60.0, "°C"),
             "Pi_CPU": SensorGaugeRange(30.0, 60.0, "°C")
