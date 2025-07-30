@@ -4,7 +4,8 @@
 
 ヘッドレスで運用しているサーバーの状態を、低消費電力なディスプレイで視覚的に一目で把握することを目的としています。
 
-![e-paper-display-mockup](https://placehold.co/400x150/f0f0f0/333333?text=Display+Image\nTemp:25.1C+Hum:45.5%25)
+![IMG_7547](https://github.com/user-attachments/assets/b0db008a-307a-4fb2-8fb7-a8c1216abc48)
+
 
 ---
 
