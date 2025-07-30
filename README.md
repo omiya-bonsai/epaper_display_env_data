@@ -26,7 +26,7 @@
 
 * **ハードウェア**:
     * Raspberry Pi （または同様のLinux環境）
-    * e-Paper ディスプレイ（[Waveshare](https://www.waveshare.com/product/displays/e-paper.htm)製など）
+    * e-Paper ディスプレイ（[Waveshare](https://www.waveshare.com/2.13inch-e-paper-hat-plus.htm)製など）
 * **ソフトウェア**:
     * Python 3
     * Git
