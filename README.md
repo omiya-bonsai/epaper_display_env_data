@@ -170,6 +170,3 @@ BASE_DIRECTORY="/home/bonsai/python3/e-ink/data"
 ## 📄 ライセンス
 
 このプロジェクトは LICENSE ファイルの下で公開されています。
-
-```
-```
