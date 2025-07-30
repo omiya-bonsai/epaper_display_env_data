@@ -33,7 +33,7 @@
 
 1.  **リポジトリをクローンします。**
     ```bash
-    git clone [https://github.com/omiya-bonsai/epaper_display_env_data.git](https://github.com/omiya-bonsai/epaper_display_env_data.git)
+    git clone https://github.com/omiya-bonsai/epaper_display_env_data.git
     cd epaper_display_env_data
     ```
 
