@@ -6,6 +6,8 @@
 
 ![IMG_7547](https://github.com/user-attachments/assets/b0db008a-307a-4fb2-8fb7-a8c1216abc48)
 
+![IMG_7548](https://github.com/user-attachments/assets/2a77b8f5-5b28-40fd-b7c6-fa247a62c7a4)
+
 ---
 
 ## ✨ 主な機能
