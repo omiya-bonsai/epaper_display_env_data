@@ -1,139 +1,184 @@
-# 環境データe-Paper表示システム
+# e-Paper 環境・システム監視ディスプレイ 🛰️
 
-このプロジェクトは、MQTT経由で受信した各種センサーの環境データを、Raspberry Piに接続されたe-Paper（電子ペーパー）ディスプレイに表示するためのPythonスクリプトです。
+このプロジェクトは、Raspberry Piに接続されたe-Paper（電子ペーパー）ディスプレイに、MQTT経由で受信した各種センサーデータと、指定したシステムサービスの状態を定期的に表示するアプリケーションです。
 
-## 概要
+ヘッドレスで運用しているサーバーの状態を、低消費電力なディスプレイで視覚的に一目で把握することを目的としています。
 
-複数のセンサー（温度、湿度、CO2、CPU温度など）からMQTTブローカーに送信されたデータをリアルタイムで購読し、整形してe-Paperディスプレイに表示します。設定情報は `.env` ファイルで管理するため、スクリプトを編集することなく安全に設定を変更できます。
+![e-paper-display-mockup](https://placehold.co/400x150/f0f0f0/333333?text=Display+Image\nTemp:25.1C+Hum:45.5%25)
 
-## 主な機能 ✨
+---
 
-  - **MQTTデータ受信**: 複数のMQTTトピックを購読し、リアルタイムにデータを更新。
-  - **データ永続化**: 受信した最新データをJSONファイルに保存し、再起動後も前回の値を表示。
-  - **視覚的な表示**: 各センサー値をテキストとゲージバーで分かりやすく可視化。
-  - **堅牢な設計**: データが古い場合や取得失敗時には「ERROR」と表示し、動作を継続。
-  - **柔軟な設定**: IPアドレスやトピック名などを `.env` ファイルで外部管理。
+## ✨ 主な機能
 
------
+* **環境データの可視化**: MQTTで受信した温度、湿度、CPU温度、CO2濃度、不快指数(THI)などのデータを表示します。
+* **システム監視**: `.env`ファイルで指定した`systemd`サービス（例: `dump1090-fa.service`）の稼働状況を監視します。
+* **異常検知アラート**: 監視対象のサービスが停止した場合、通常の表示を中断し、画面全体で警告メッセージを表示します。
+* **データ永続化**: 受信した最新データをJSONファイルに保存し、スクリプト再起動時に状態を復元します。
+* **柔軟な設定**: 接続先や監視対象、表示間隔などを`.env`ファイルで簡単に変更できます。
 
-## 動作要件 🛠️
+---
 
-### ハードウェア
+## 🛠️ セットアップ
 
-  - Raspberry Pi (Zero 2 W, 5 など)
-  - e-Paper ディスプレイ (例: Waveshare 2.13inch e-Paper V4)
-  - 各種センサー (BME688, SCD4x など) と、それらのデータをMQTTで送信する仕組み
+### 1. 必要条件
 
-### ソフトウェア
+* **ハードウェア**:
+    * Raspberry Pi （または同様のLinux環境）
+    * e-Paper ディスプレイ（[Waveshare](https://www.waveshare.com/product/displays/e-paper.htm)製など）
+* **ソフトウェア**:
+    * Python 3
+    * Git
 
-  - Python 3
-  - 必要なPythonライブラリ (`requirements.txt`を参照)
+### 2. インストール手順
 
------
-
-## セットアップ手順 🚀
-
-1.  **リポジトリのクローン**
-
-    ```zsh
-    git clone https://your-repository-url/e-ink-display.git
-    cd e-ink-display
+1.  **リポジトリをクローンします。**
+    ```bash
+    git clone <your-repository-url>
+    cd <your-repository-name>
     ```
 
-2.  **Python仮想環境の作成と有効化** (推奨)
-
-    ```zsh
+2.  **Python仮想環境を作成し、有効化します。**
+    ```bash
     python3 -m venv eink
     source eink/bin/activate
     ```
 
-3.  **必要なライブラリのインストール**
-    `requirements.txt` を使って一括でインストールします。
-
-    ```zsh
+3.  **必要なライブラリをインストールします。**
+    ```bash
     pip install -r requirements.txt
     ```
 
-    *e-Paperのライブラリは、お使いのモデルのメーカーの指示に従って別途インストールが必要な場合があります。*
+### 3. `requirements.txt` の内容
 
-4.  **設定ファイルの準備**
-    サンプルをコピーして `.env` ファイルを作成します。
-
-    ```zsh
-    cp .env.sample .env
-    ```
-
-5.  **設定ファイルの編集**
-    `vim` などのエディタで `.env` ファイルを開き、ご自身の環境に合わせてMQTTブローカーのIPアドレスや各種設定値を修正します。
-
-    ```zsh
-    vim .env
-    ```
-
-6.  **データ保存ディレクトリの作成**
-    `.env` で指定した `BASE_DIRECTORY` を作成します。
-
-    ```zsh
-    mkdir -p data
-    ```
-
------
-
-## 設定 (`.env` ファイル)
-
-`.env` ファイルで以下の項目を設定します。
-
-| 変数名                              | 説明                                            | 例                               |
-| ----------------------------------- | ----------------------------------------------- | -------------------------------- |
-| `MQTT_BROKER_IP_ADDRESS`            | MQTTブローカーのIPアドレス                      | `192.168.3.82`                   |
-| `MQTT_BROKER_PORT`                  | MQTTブローカーのポート番号                      | `1883`                           |
-| `MQTT_CLIENT_ID`                    | このスクリプトのMQTTクライアントID              | `epaper_display_client_01`       |
-| `MQTT_TOPIC_QZSS_CPU_TEMP`          | QZSS受信機CPU温度のトピック                     | `raspberry/qzss/temperature`     |
-| `MQTT_TOPIC_PI_CPU_TEMP`            | Pi本体CPU温度のトピック                         | `raspberry/temperature`          |
-| `MQTT_TOPIC_ENV4`                   | BME688等の環境センサートピック                  | `env4`                           |
-| `MQTT_TOPIC_CO2_DATA`               | CO2センサートピック                             | `co2_data`                       |
-| `MQTT_TOPIC_SENSOR_DATA`            | THI等の計算値センサートピック                   | `sensor_data`                    |
-| `BASE_DIRECTORY`                    | データ保存用ディレクトリのパス                  | `./data`                         |
-| `DISPLAY_FONT_FILE_PATH`            | 表示に使うフォントのパス                        | `/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf` |
-| `EPAPER_DISPLAY_TYPE`               | e-Paperのモデル名                               | `epd2in13_V4`                    |
-| `DISPLAY_UPDATE_INTERVAL_SECONDS`   | 画面の更新間隔（秒）                            | `300`                            |
-| `DATA_STALENESS_THRESHOLD_SECONDS`  | データが古いと判断する閾値（秒）                | `5400`                           |
-
------
-
-## 使い方 ▶️
-
-以下のコマンドでスクリプトを実行します。
-
-```zsh
-python3 epaper_display_env_data.py
-```
-
-Ctrl+C で安全に終了できます。
-
-バックグラウンドで常時実行させたい場合は、`systemd` や `supervisor` を使ってサービスとして登録することをお勧めします。
-
------
-
-## プロジェクト構成
-
-```
-.
-├── .env                  # (作成する) 環境設定ファイル
-├── .env.sample           # .env のテンプレート
-├── .gitignore            # Gitの無視リスト
-├── data/                 # (作成される) センサーデータ保存用ディレクトリ
-│   ├── co2_data.json
-│   └── ...
-├── epaper_display_env_data.py # 本体スクリプト
-├── README.md             # このファイル
-└── requirements.txt      # Pythonライブラリリスト
-```
-
-### `requirements.txt` の内容
+このプロジェクトで使われる主なライブラリです。`requirements.txt`という名前で保存してください。
 
 ```txt
 paho-mqtt
-Pillow
+pillow
 python-dotenv
+# e-Paperのモデルに応じたドライバライブラリ
+# 例: waveshare-epd
+````
+
+### 4\. 設定ファイルの作成
+
+`.env.example`を参考に、`.env`ファイルを作成します。
+
+1.  設定ファイルを作成します。
+
+    ```bash
+    cp .env.example .env
+    ```
+
+2.  `vim`エディタで`.env`ファイルを開き、ご自身の環境に合わせて値を編集します。
+
+    ```bash
+    vim .env
+    ```
+
+#### `.env.example` （設定例）
+
+```dotenv
+# --- MQTT Broker Settings ---
+MQTT_BROKER_IP_ADDRESS="192.168.1.10"
+MQTT_BROKER_PORT=1883
+
+# --- MQTT Topics ---
+MQTT_TOPIC_QZSS_CPU_TEMP="sensors/qzss/cpu_temp"
+MQTT_TOPIC_PI_CPU_TEMP="sensors/pi/cpu_temp"
+MQTT_TOPIC_ENV4="sensors/environment/bme280"
+MQTT_TOPIC_CO2_DATA="sensors/environment/co2"
+MQTT_TOPIC_SENSOR_DATA="sensors/environment/thi"
+
+# --- System Service Monitoring ---
+# 監視したいsystemdサービスの名前
+DUMP1090_SERVICE_NAME="dump1090-fa.service"
+
+# --- Display Settings ---
+# e-Paperのモデル名（例: epd2in13_V4）
+EPAPER_DISPLAY_TYPE="epd2in13_V4"
+# 表示更新の間隔（秒）
+DISPLAY_UPDATE_INTERVAL_SECONDS=300
+# 使用するフォントのパス
+DISPLAY_FONT_FILE_PATH="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+DISPLAY_FONT_SIZE_PIXELS=16
+
+# --- Data Persistence ---
+# データ保存先のベースディレクトリ
+BASE_DIRECTORY="/home/bonsai/python3/e-ink/data"
+```
+
+-----
+
+## 🚀 使い方
+
+このスクリプトは、`systemd`を使ってバックグラウンドで常時実行させることを想定しています。
+
+### サービスとして登録
+
+1.  `systemd`のサービスファイルを作成します。
+
+    ```bash
+    sudo vim /etc/systemd/system/epaper_disp.service
+    ```
+
+2.  以下の内容を貼り付け、`User`と`WorkingDirectory`/`ExecStart`のパスを環境に合わせて修正します。
+
+    ```ini
+    [Unit]
+    Description=E-Paper Display Environment Data Service
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=bonsai
+    WorkingDirectory=/home/bonsai/python3/e-ink
+    ExecStart=/home/bonsai/python3/e-ink/eink/bin/python /home/bonsai/python3/e-ink/epaper_display_env_data.py
+    Restart=always
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+
+    *注意: `ExecStart`には仮想環境内のPythonを指定するのが確実です。*
+
+### サービスの操作
+
+  * **サービスの有効化と初回起動:**
+
+    ```bash
+    sudo systemctl enable --now epaper_disp.service
+    ```
+
+  * **サービスの停止:**
+
+    ```bash
+    sudo systemctl stop epaper_disp.service
+    ```
+
+  * **サービスの再起動:**
+
+    ```bash
+    sudo systemctl restart epaper_disp.service
+    ```
+
+  * **サービスの稼働状況確認:**
+
+    ```bash
+    systemctl status epaper_disp.service
+    ```
+
+  * **ログのリアルタイム確認:**
+
+    ```bash
+    journalctl -f -u epaper_disp.service
+    ```
+
+-----
+
+## 📄 ライセンス
+
+このプロジェクトは [LICENSE](https://www.google.com/search?q=LICENSE) ファイルの下で公開されています。
+
+```
 ```
