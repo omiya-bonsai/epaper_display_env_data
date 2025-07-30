@@ -6,7 +6,6 @@
 
 ![IMG_7547](https://github.com/user-attachments/assets/b0db008a-307a-4fb2-8fb7-a8c1216abc48)
 
-
 ---
 
 ## ✨ 主な機能
@@ -34,8 +33,8 @@
 
 1.  **リポジトリをクローンします。**
     ```bash
-    git clone <your-repository-url>
-    cd <your-repository-name>
+    git clone [https://github.com/omiya-bonsai/epaper_display_env_data.git](https://github.com/omiya-bonsai/epaper_display_env_data.git)
+    cd epaper_display_env_data
     ```
 
 2.  **Python仮想環境を作成し、有効化します。**
@@ -146,31 +145,22 @@ BASE_DIRECTORY="/home/bonsai/python3/e-ink/data"
 ### サービスの操作
 
   * **サービスの有効化と初回起動:**
-
     ```bash
     sudo systemctl enable --now epaper_disp.service
     ```
-
   * **サービスの停止:**
-
     ```bash
     sudo systemctl stop epaper_disp.service
     ```
-
   * **サービスの再起動:**
-
     ```bash
     sudo systemctl restart epaper_disp.service
     ```
-
   * **サービスの稼働状況確認:**
-
     ```bash
     systemctl status epaper_disp.service
     ```
-
   * **ログのリアルタイム確認:**
-
     ```bash
     journalctl -f -u epaper_disp.service
     ```
