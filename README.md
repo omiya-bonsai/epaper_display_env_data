@@ -1,26 +1,24 @@
 # e-Paper 環境・システム・気象監視ディスプレイ 🌦️🛰️
 
-このプロジェクトは、Raspberry Piに接続されたe-Paper（電子ペーパー）ディスプレイに、MQTT経由で受信した各種センサーデータやシステム状態、そしてレインセンサーによる雨検知情報を定期的に表示するアプリケーションです。
-
-低消費電力な電子ペーパーを活用し、ヘッドレス運用中のサーバーや環境・気象状態を一目で把握できます。
+このプロジェクトは、Raspberry Pi に接続した e-Paper（電子ペーパー）に、MQTT 経由で受信した**環境データ**・**システム状態**・**レインセンサー情報**を定期的に表示するアプリケーションです。  
+低消費電力・常時視認・再起動復元に対応し、ヘッドレス運用のサーバーや屋外観測に最適です。
 
 ---
 
 ## ✨ 主な機能
 
-* **環境データの可視化**  
-  MQTTで受信した温度、湿度、CO2濃度、不快指数(THI)、CPU温度などを表示します。
-* **気象監視（レインセンサー統合）**  
-  降雨検知、結露検知、ノイズ異常、ケーブル接続異常、オフラインなどの状態を1行で表示します。  
-  状態が正常なら「OK」表記、降雨中は「RAIN」、その他異常は簡潔なアラート表記に切り替わります。
-* **システム監視**  
-  `.env`で指定した`systemd`サービス（例: ADS-Bデコーダー）やPi5のCPU/MEM使用率などを監視します。
-* **異常検知アラート**  
-  監視対象サービスが停止すると、通常の情報表示を中断し全画面警告を表示します。
-* **データ永続化**  
-  最新データをJSONファイルに保存し、スクリプト再起動時に状態を復元します。
-* **柔軟な設定**  
-  接続先や表示内容、更新間隔などを`.env`で簡単に変更できます。
+- **環境データの可視化**  
+  温度・湿度・CO₂濃度・不快指数（THI）を見やすく表示します（CO₂は THI と同じ行で併記）。
+- **気象監視（レインセンサー統合）**  
+  雨/降り出し予兆/ケーブル異常/オフライン/エラー/再起動などを1行で簡潔に表示します。
+- **システム監視**  
+  Pi5 と ADS 側の **CPU温度のみ** を表示します（使用率などは表示しません）。
+- **異常時アラート**  
+  指定した systemd サービスが停止すると、通常表示を中断し全画面の警告表示に切り替えます。
+- **データ永続化**  
+  最新値を JSON に保存し、再起動後も直前の状態を即座に復元します。
+- **柔軟な設定**  
+  `.env` で MQTT 接続先・トピック・表示間隔・フォントなどを変更できます。
 
 ---
 
@@ -28,15 +26,15 @@
 
 ### 必要条件
 
-* **ハードウェア**
-  * Raspberry Pi（Zero 2 W〜5推奨）
-  * e-Paperディスプレイ（例: Waveshare 2.13inch）
-  * （オプション）雨量・結露センサー
-* **ソフトウェア**
-  * Python 3
-  * Git
+- **ハードウェア**
+  - Raspberry Pi（Zero 2 W〜5 推奨）
+  - e-Paper ディスプレイ（例: Waveshare 2.13inch）
+  - （任意）レインセンサー
+- **ソフトウェア**
+  - Python 3
+  - Git
 
-### インストール手順
+### インストール
 
 ```bash
 git clone https://github.com/omiya-bonsai/epaper_display_env_data.git
@@ -54,26 +52,30 @@ pip install -r requirements.txt
 paho-mqtt
 pillow
 python-dotenv
-# e-Paperのモデルに応じたドライバライブラリ
-# 例: waveshare-epd
+# e-Paper のモデルに応じたドライバ（例: waveshare-epd）
 ```
 
 ---
 
 ## `.env` 設定例
 
+> 下記の変数名は **現在のスクリプト実装** に合わせています。
+
 ```dotenv
 # --- MQTT Broker ---
 MQTT_BROKER_IP_ADDRESS="192.168.x.x"
 MQTT_BROKER_PORT=1883
+MQTT_KEEPALIVE=60
+MQTT_CLIENT_ID="epaper_display_subscriber"
 
 # --- MQTT Topics ---
-MQTT_TOPIC_ADS_CPU_TEMP="sensors/ads/cpu_temp"
-MQTT_TOPIC_PI_CPU_TEMP="sensors/pi/cpu_temp"
-MQTT_TOPIC_ENV4="sensors/environment/bme280"
-MQTT_TOPIC_CO2_DATA="sensors/environment/co2"
-MQTT_TOPIC_SENSOR_DATA="sensors/environment/thi"
-MQTT_TOPIC_RAIN_SENSOR="home/weather/rain_sensor"
+# ※ コード上では「ADS 側 CPU 温度」の環境変数名は互換のため QZSS としています
+MQTT_TOPIC_QZSS_CPU_TEMP="sensors/ads/cpu_temp"  # ADS 側 CPU 温度
+MQTT_TOPIC_PI_CPU_TEMP="sensors/pi/cpu_temp"     # Pi5 CPU 温度（vcgencmd 出力を想定）
+MQTT_TOPIC_ENV4="sensors/environment/bme280"     # 温度・湿度
+MQTT_TOPIC_CO2_DATA="sensors/environment/co2"    # CO2（pico_w_production のみ処理）
+MQTT_TOPIC_SENSOR_DATA="sensors/environment/thi" # THI（pico_w_production のみ処理）
+MQTT_TOPIC_RAIN="home/weather/rain_sensor"       # レインセンサー
 
 # --- System Service ---
 DUMP1090_SERVICE_NAME="dump1090-fa.service"
@@ -86,13 +88,20 @@ DISPLAY_FONT_SIZE_PIXELS=16
 
 # --- Data Storage ---
 BASE_DIRECTORY="/home/bonsai/python3/e-ink/data"
+
+# --- Thresholds (optional) ---
+DATA_STALENESS_THRESHOLD_SECONDS=5400
+NO_CHANGE_ERROR_THRESHOLD_SECONDS=3600
+RAIN_ONLINE_THRESHOLD_SECONDS=90
+PRERAIN_THRESHOLD_PERCENT=3.0
+DEW_THRESHOLD_PERCENT=2.0
 ```
 
 ---
 
-## 🚀 実行方法
+## 🚀 実行方法（systemd サービス化）
 
-サービス登録例：
+サービスファイル例：
 
 ```bash
 sudo vim /etc/systemd/system/epaper_disp.service
@@ -114,63 +123,102 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-サービス起動：
+起動と自動起動設定：
 
 ```bash
 sudo systemctl enable --now epaper_disp.service
 ```
 
----
+運用時の便利コマンド：
 
-## 📡 表示仕様
-
-| 行 | 表示内容                             |
-| - | -------------------------------- |
-| 1 | 温度 / 湿度                          |
-| 2 | CO2濃度                            |
-| 3 | ADS CPU温度 / サービス稼働状況             |
-| 4 | Pi5 CPU温度 / 使用率（"/"区切り）          |
-| 5 | RAINステータス（雨・結露・ノイズ・ケーブル異常・オフライン） |
-| 6 | THI（不快指数）                        |
+```bash
+systemctl status epaper_disp.service
+journalctl -f -u epaper_disp.service
+sudo systemctl restart epaper_disp.service
+```
 
 ---
 
-## 🌧️ RAIN行のステータス一覧
+## 📡 表示仕様（5 行構成・CPUは温度のみ）
 
-レインセンサーは以下の状態を1行で表示します。
+本ディスプレイは **5 行** 構成です。CPU は **温度のみ** を表示します。
 
-| 表記例            | 意味                   |
-| -------------- | -------------------- |
-| `RAIN`         | 雨を検知中                |
-| `DEW`          | 結露を検知                |
-| `NOISE`        | ノイズ多発（測定値が不安定）       |
-| `CABLE MISS`   | ケーブル接続異常             |
-| `OFFLINE MISS` | デバイスからのデータが途絶（オフライン） |
-| `OK`           | すべて正常                |
-| `INIT...`      | データ未取得だが更新間隔内（初期化中）  |
+|  行 | 表示内容                                    | 備考                                               |
+| -: | --------------------------------------- | ------------------------------------------------ |
+|  1 | **Temp:** `xx.x°C`                      | 温度。ゲージ表示あり                                       |
+|  2 | **Hum:** `yy.y%`                        | 湿度。ゲージ表示あり                                       |
+|  3 | **Pi5:** `aa.a℃` **/** **ADS:** `bb.b℃` | Pi5/ADS の CPU温度のみ。スラッシュ区切り                       |
+|  4 | **RAIN 行**                              | 雨/予兆/ケーブル異常/オフライン/エラー/再起動等を1行に集約                 |
+|  5 | **THI:** `t.t` **/** **CO2:** `ccccppm` | どちらか欠損時は `ERROR` 併記（例: `THI:ERROR / CO2:800ppm`） |
 
-※ 異常は複合表示される場合があります（例: `RAIN / NOISE`）
+* 文字数制限に合わせ、行末は自動トリミング（`…`）します。
+* 湿度は 2 行目に表示するため、**RAIN 行では湿度を重複表示しません**。
+* 温度・湿度・CPU温度にはゲージ（バー）を描画して視認性を高めます。
+
+---
+
+## 🌧️ RAIN 行のステータス一覧（例）
+
+レインセンサーの状態を1行にまとめて表示します。複数同時に出る場合は空白区切りで並びます。
+
+| 表記例            | 意味                                     |
+| -------------- | -------------------------------------- |
+| `RAIN`         | 雨を検知中（変化率に応じて `H/M/L` を付与：`RAIN H` など） |
+| `RAIN→`        | 降り出し予兆（baseline 比の変化率 `Δ%` がしきい値以上）    |
+| `OFFLINE MISS` | 一定秒数データ受信なし（オフライン）                     |
+| `CAB`          | ケーブル接続異常                               |
+| `ERR`          | エラーカウンタが正の値                            |
+| `RST`          | デバイス再起動を検知（uptime が後退）                 |
+| `Δ:x.x%`       | baseline 比の変化率（行幅に余裕があるときのみ併記）         |
+| `ALL CLEAR`    | 問題なし（雨フラグも予兆もアラートも無し）                  |
+
+**例**：
+
+* `RAIN M Δ:5.2%`
+* `RAIN→ Δ:3.1%`
+* `OFFLINE MISS`
+* `CAB ERR`
+* `ALL CLEAR`
+
+> 将来拡張で結露（DEW）などを独立検知する場合があります。
+
+---
+
+## ⚙️ 実装の要点
+
+* **MQTT 受信**：各トピックを購読し、最新値を受信。
+  受信時刻（last\_received）と「最後に値が変わった時刻」（last\_changed）も記録し、
+  **長時間変化が無い**（センサー固着の可能性）場合は `ERROR` 表示に切り替えます。
+* **データ永続化**：`BASE_DIRECTORY`（例: `data/`）以下に JSON で保存・復元。
+  再起動後も直前の表示を保ちます。
+* **サービス監視**：`.env` の `DUMP1090_SERVICE_NAME` を `systemctl is-active` で監視。
+  停止時は通常画面をやめ、**全画面の警告**（`!! ALERT !! … SERVICE DOWN`）を表示します。
+* **e-Paper 非依存動作**：e-Paper ドライバが無くても**テストモード**で画像生成ルーチンを実行。
+  実機が無い環境でも開発・検証ができます。
+* **文字幅対策**：行幅を超えるテキストは、末尾を `…` に省略して収めます。
+  ラベルは短く（例: `RPi5`→`Pi5`）、CPU の行は `/` 区切りで揃えます。
 
 ---
 
 ## 💡 運用ヒント
 
-* 湿度（Hum）はすでに上段行に表示されるため、RAIN行では重複表示しません。
-* ディスプレイの文字数制限に合わせて全行はみ出さないよう調整されています。
-* Pi5行は`/`で各値を区切るため、THI行と視覚的に揃います。
+* しきい値（`RAIN_ONLINE_THRESHOLD_SECONDS`・`PRERAIN_THRESHOLD_PERCENT` など）は
+  設置環境に合わせて調整してください（誤検知/見逃しの最小化）。
+* RAIN 行に湿度を重複表示しない設計により、行幅に余裕を確保しています。
+* `systemctl` が使えない環境ではサービス監視が機能しないため、`.env`の設定やOS環境を確認してください。
 
 ---
 
 ## 🙏 謝辞
 
-このプロジェクトは、OpenAIのChatGPT（GPT-5）との対話を通じて設計・改良が行われました。
+このプロジェクトは、OpenAI の ChatGPT（GPT-5）との対話を通じて設計・改良が行われました。
 特に以下の点での貢献に感謝します。
 
-* レインセンサー（雨・結露・ノイズ・ケーブル異常・オフライン）監視機能の設計と統合
-* RAIN行の表示ロジック、異常時の簡潔な英語表記ルールの提案
-* Pi5行の`/`区切り表記化による視認性向上
-* e-Paperの文字数制限内での表示最適化
-* README.md の構成整理と最新仕様への更新
+* レインセンサー（雨・予兆・ケーブル異常・オフライン・エラー・再起動）監視ロジックの設計と統合
+* RAIN 行の簡潔な英語表記ルールと表示優先度の整理
+* Pi5/ADS の**CPU温度のみ**に特化した表示と `/` 区切りによる視認性向上
+* e-Paper の文字数制限を踏まえた自動トリミング（`…`）の導入
+* README.md の構成整理と最新仕様（5 行構成）への更新
 
 ---
 
