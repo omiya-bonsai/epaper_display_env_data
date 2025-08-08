@@ -5,3 +5,23 @@
 data/
 tmp/
 waste/
+waste/
+
+
+# secrets
+.env
+*.env
+.env.*
+
+# runtime data
+data/
+tmp/
+waste/
+__pycache__/
+*.pyc
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
