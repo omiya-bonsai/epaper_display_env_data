@@ -1,116 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# =================================================================================================
-#
-#   Environmental Data & System Status Display for e-Paper
-#
-#   Version: 1.3
-#   Last Updated: 2025-08-08
-#
-# =================================================================================================
-#
-# ## 1. はじめに：このスクリプトの目的
-#
-# このPythonスクリプトは、Raspberry Piのような小型コンピュータに接続された
-# 「e-Paper（電子ペーパー）」ディスプレイに、様々な情報を表示するためのプログラムです。
-# 主に、センサーから取得した「環境データ」と、システムの重要な「サービス（常駐プログラム）の
-# 稼働状況」という2つの大きな役割を持っています。
-#
-# ヘッドレス（モニターを接続しない）で運用されることの多いRaspberry Piの現在の状態を、
-# 低消費電力なe-Paperでいつでも確認できるようにすることを目的としています。
-#
-# -------------------------------------------------------------------------------------------------
-#
-# ## 2. このスクリプトの主な機能
-#
-#   - **MQTTによるデータ受信:**
-#     温度、湿度、CO2濃度などの環境データは、MQTTという軽量なプロトコルを通じて
-#     リアルタイムに受信します。これにより、センサーを接続した別のデバイスからでも
-#     データを受け取ることができます。
-#
-#   - **システムサービスの監視:**
-#     `dump1090-fa.service` のような、システムで常に動いていてほしい重要なサービスが
-#     正常に動作しているかを定期的にチェックします。もし停止していた場合は、
-#     通常のデータ表示を中断し、画面全体で大きな警告（アラート）を表示します。
-#
-#   - **e-Paperへの描画:**
-#     受信したデータや警告を、白黒のe-Paperディスプレイに見やすくレイアウトして
-#     表示します。ゲージバーなども描画し、視覚的に分かりやすい工夫をしています。
-#
-#   - **データの永続化（保存）:**
-#     受信した最新のセンサーデータをJSON形式のファイルに保存します。これにより、
-#     スクリプトが再起動しても、前回のデータをすぐに画面に復元できます。
-#
-#   - **柔軟な設定:**
-#     MQTTサーバーのアドレスや、監視するサービス名、フォントのパスなどの設定は、
-#     `.env`という別のファイルに記述します。これにより、スクリプト本体のコードを
-#     直接書き換えることなく、安全かつ簡単に設定変更ができます。
-#
-# -------------------------------------------------------------------------------------------------
-#
-# ## 3. プログラムの動作フロー
-#
-# このスクリプトは、`systemd`によってシステムの起動時に自動実行され、以下の流れで動作します。
-#
-#   1. **初期化:**
-#      - 必要なライブラリを読み込みます。
-#      - `.env`ファイルから設定値を読み込みます。
-#      - ログ設定を初期化します。
-#
-#   2. **データ復元:**
-#      - 前回終了時に保存されたJSONファイルを探し、中身を読み込んで、
-#        各センサーの値をプログラムの変数に復元します。
-#
-#   3. **MQTTクライアント起動:**
-#      - MQTTサーバーへの接続を開始します。
-#      - 接続成功後、指定されたトピックの購読（受信待機）をバックグラウンドで開始します。
-#      - メッセージを受信するたびに `handle_mqtt_message_received` 関数が呼び出され、
-#        最新のデータが変数に格納され、ファイルに保存されます。
-#
-#   4. **メインループ開始:**
-#      - `start_continuous_display_updates` 関数内の `while True:` ループに入り、
-#        プログラムが終了するまで以下の処理を繰り返します。
-#
-#   5. **定周期の画面更新:**
-#      - **(a) サービスチェック:** `dump1090-fa.service`が動作しているか確認します。
-#      - **(b) 画像生成:**
-#            - もしサービスが停止していたら、「警告画面」の画像を生成します。
-#            - サービスが正常なら、現在のセンサーデータから「通常画面」の画像を生成します。
-#      - **(c) e-Paper転送:** 生成した画像をe-Paperに転送して表示を更新します。
-#      - **(d) 待機:** `.env`で設定された `DISPLAY_UPDATE_INTERVAL_SECONDS` の秒数だけスリープ（待機）し、(a)に戻ります。
-#
-# -------------------------------------------------------------------------------------------------
-#
-# ## 4. コードの主要な構成要素ガイド
-#
-#   - `定数 (...)`: スクリプトの冒頭部分。`.env`から読み込んだ設定値が格納されます。
-#
-#   - `グローバル変数 (...)`: スクリプト全体で共有される変数。最新のセンサー値などが保持されます。
-#
-#   - `check_systemd_service_status()`: 指定されたサービスが動いているかをOSに問い合わせる関数。
-#                                      `subprocess`ライブラリを使い、Linuxの`systemctl`コマンドを実行しています。
-#
-#   - `handle_mqtt_...()`: MQTT関連の関数群。接続時、メッセージ受信時、切断時に自動的に呼び出されます。
-#
-#   - `save_...() / load_...()`: データをJSONファイルに書き出したり、読み込んだりする関数群。
-#
-#   - `EnvironmentalDataDisplaySystem` クラス:
-#     このプログラムの心臓部。e-Paperデバイスの初期化、MQTTクライアントの管理、
-#     そしてメインループの実行など、すべての機能を統括しています。
-#
-#   - `_create_display_image_for_epaper()` メソッド:
-#     このクラス内で最も重要な描画担当の関数。`check_systemd_service_status`の結果に応じて、
-#     `if not is_dump1090_ok:` の分岐で警告画面を作るか、`else`以降で通常のセンサー画面を作るかを決定します。
-#
-#   - `main()`: プログラムが実行されたときに、最初に呼び出される関数。
-#               `EnvironmentalDataDisplaySystem`クラスのインスタンスを作成し、メインループを開始させます。
-#
-# =================================================================================================
-
-# --- ライブラリのインポート ---
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
+from typing import Tuple, Optional
 import json
 import time
 import os
@@ -123,10 +15,8 @@ import re
 from dotenv import load_dotenv
 import subprocess
 
-# --- 設定の読み込み ---
 load_dotenv()
 
-# --- ハードウェアの確認 ---
 try:
     import epaper
     EPAPER_AVAILABLE = True
@@ -134,14 +24,9 @@ except ImportError:
     EPAPER_AVAILABLE = False
     print("WARNING: epaper module not found. Running in test mode.")
 
-# --- ログ設定 ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- 定数（.envファイルから読み込む設定値）の定義 ---
 DATA_STALENESS_THRESHOLD_SECONDS = int(os.getenv('DATA_STALENESS_THRESHOLD_SECONDS', 5400))
 NO_CHANGE_ERROR_THRESHOLD_SECONDS = 3600
 MQTT_BROKER_IP_ADDRESS = os.getenv('MQTT_BROKER_IP_ADDRESS', "localhost")
@@ -162,7 +47,6 @@ CO2_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'co2_data.json')
 THI_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'thi_data.json')
 DUMP1090_SERVICE_NAME = os.getenv('DUMP1090_SERVICE_NAME', 'dump1090-fa.service')
 
-# --- グローバル変数 ---
 current_mqtt_qzss_cpu_temperature: Optional[float] = None
 mqtt_qzss_cpu_last_received_timestamp: Optional[float] = None
 mqtt_qzss_cpu_last_changed_timestamp: Optional[float] = None
@@ -186,7 +70,6 @@ thi_value_last_changed_timestamp: Optional[float] = None
 data_lock = threading.Lock()
 
 def check_systemd_service_status(service_name: str) -> bool:
-    """指定されたsystemdサービスが 'active' かどうかをチェックする関数"""
     if not service_name:
         return True
     try:
@@ -222,7 +105,8 @@ def handle_mqtt_message_received(client, userdata, message):
     try:
         payload_str = message.payload.decode('utf-8', errors='ignore')
         with data_lock:
-            if not message.topic: return
+            if not message.topic:
+                return
             if message.topic == MQTT_TOPIC_QZSS_CPU_TEMP:
                 payload_dict = json.loads(payload_str)
                 new_temp = payload_dict.get("temperature")
@@ -230,7 +114,14 @@ def handle_mqtt_message_received(client, userdata, message):
                     mqtt_qzss_cpu_last_changed_timestamp = received_timestamp
                 current_mqtt_qzss_cpu_temperature = new_temp
                 mqtt_qzss_cpu_last_received_timestamp = received_timestamp
-                save_data_to_json_file(QZSS_TEMPERATURE_FILE_PATH, {"temperature": current_mqtt_qzss_cpu_temperature, "timestamp": received_timestamp, "last_changed_timestamp": mqtt_qzss_cpu_last_changed_timestamp})
+                save_data_to_json_file(
+                    QZSS_TEMPERATURE_FILE_PATH,
+                    {
+                        "temperature": current_mqtt_qzss_cpu_temperature,
+                        "timestamp": received_timestamp,
+                        "last_changed_timestamp": mqtt_qzss_cpu_last_changed_timestamp
+                    }
+                )
                 logger.info(f"MQTT QZSS CPU temperature received: {current_mqtt_qzss_cpu_temperature}°C")
             elif message.topic == MQTT_TOPIC_PI_CPU_TEMP:
                 match = re.search(r"temp=(\d+\.?\d*)", payload_str)
@@ -240,7 +131,14 @@ def handle_mqtt_message_received(client, userdata, message):
                         pi_cpu_last_changed_timestamp = received_timestamp
                     current_pi_cpu_temperature = new_temp
                     pi_cpu_last_received_timestamp = received_timestamp
-                    save_data_to_json_file(PI_TEMPERATURE_FILE_PATH, {"temperature": current_pi_cpu_temperature, "timestamp": received_timestamp, "last_changed_timestamp": pi_cpu_last_changed_timestamp})
+                    save_data_to_json_file(
+                        PI_TEMPERATURE_FILE_PATH,
+                        {
+                            "temperature": current_pi_cpu_temperature,
+                            "timestamp": received_timestamp,
+                            "last_changed_timestamp": pi_cpu_last_changed_timestamp
+                        }
+                    )
                     logger.info(f"MQTT Pi CPU temperature received: {current_pi_cpu_temperature}°C")
             elif message.topic == MQTT_TOPIC_ENV4:
                 payload_dict = json.loads(payload_str)
@@ -249,13 +147,27 @@ def handle_mqtt_message_received(client, userdata, message):
                     environment_temperature_last_changed_timestamp = received_timestamp
                 current_environment_temperature = new_temp
                 environment_temperature_last_received_timestamp = received_timestamp
-                save_data_to_json_file(ENVIRONMENT_TEMPERATURE_FILE_PATH, {"temperature": current_environment_temperature, "timestamp": received_timestamp, "last_changed_timestamp": environment_temperature_last_changed_timestamp})
+                save_data_to_json_file(
+                    ENVIRONMENT_TEMPERATURE_FILE_PATH,
+                    {
+                        "temperature": current_environment_temperature,
+                        "timestamp": received_timestamp,
+                        "last_changed_timestamp": environment_temperature_last_changed_timestamp
+                    }
+                )
                 new_humidity = payload_dict.get("humidity")
                 if new_humidity is not None and new_humidity != current_environment_humidity:
                     environment_humidity_last_changed_timestamp = received_timestamp
                 current_environment_humidity = new_humidity
                 environment_humidity_last_received_timestamp = received_timestamp
-                save_data_to_json_file(ENVIRONMENT_HUMIDITY_FILE_PATH, {"humidity": current_environment_humidity, "timestamp": environment_humidity_last_received_timestamp, "last_changed_timestamp": environment_humidity_last_changed_timestamp})
+                save_data_to_json_file(
+                    ENVIRONMENT_HUMIDITY_FILE_PATH,
+                    {
+                        "humidity": current_environment_humidity,
+                        "timestamp": environment_humidity_last_received_timestamp,
+                        "last_changed_timestamp": environment_humidity_last_changed_timestamp
+                    }
+                )
                 logger.info(f"MQTT environment data received - Temperature: {current_environment_temperature}°C, Humidity: {current_environment_humidity}%")
             elif message.topic == MQTT_TOPIC_CO2_DATA:
                 payload_dict = json.loads(payload_str)
@@ -266,7 +178,15 @@ def handle_mqtt_message_received(client, userdata, message):
                     current_co2_concentration = new_co2
                     co2_data_last_received_timestamp = received_timestamp
                     co2_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(CO2_DATA_FILE_PATH, {"co2": current_co2_concentration, "timestamp": co2_data_source_timestamp, "last_update": co2_data_last_received_timestamp, "last_changed_timestamp": co2_concentration_last_changed_t[118;1:3uimestamp})
+                    save_data_to_json_file(
+                        CO2_DATA_FILE_PATH,
+                        {
+                            "co2": current_co2_concentration,
+                            "timestamp": co2_data_source_timestamp,
+                            "last_update": co2_data_last_received_timestamp,
+                            "last_changed_timestamp": co2_concentration_last_changed_timestamp
+                        }
+                    )
                     logger.info(f"MQTT CO2 concentration received: {current_co2_concentration} ppm")
             elif message.topic == MQTT_TOPIC_SENSOR_DATA:
                 payload_dict = json.loads(payload_str)
@@ -277,7 +197,15 @@ def handle_mqtt_message_received(client, userdata, message):
                     current_thi_value = new_thi
                     thi_data_last_received_timestamp = received_timestamp
                     thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(THI_DATA_FILE_PATH, {"thi": current_thi_value, "timestamp": thi_data_source_timestamp, "last_update": thi_data_last_received_timestamp, "last_changed_timestamp": thi_value_last_changed_timestamp})
+                    save_data_to_json_file(
+                        THI_DATA_FILE_PATH,
+                        {
+                            "thi": current_thi_value,
+                            "timestamp": thi_data_source_timestamp,
+                            "last_update": thi_data_last_received_timestamp,
+                            "last_changed_timestamp": thi_value_last_changed_timestamp
+                        }
+                    )
                     logger.info(f"MQTT THI data received: {current_thi_value}")
     except Exception as e:
         logger.error(f"Error during MQTT message processing: {e}")
@@ -338,7 +266,8 @@ def load_saved_all_mqtt_data():
                 mqtt_qzss_cpu_last_changed_timestamp = loaded_data.get("last_changed_timestamp", mqtt_qzss_cpu_last_received_timestamp)
                 logger.info(f"QZSS CPU temperature restored: {current_mqtt_qzss_cpu_temperature}°C")
                 data_was_loaded = True
-    except Exception as e: logger.error(f"QZSS CPU temperature data restoration error: {e}")
+    except Exception as e:
+        logger.error(f"QZSS CPU temperature data restoration error: {e}")
     try:
         if os.path.exists(PI_TEMPERATURE_FILE_PATH):
             loaded_data = load_data_from_json_file(PI_TEMPERATURE_FILE_PATH)
@@ -348,7 +277,8 @@ def load_saved_all_mqtt_data():
                 pi_cpu_last_changed_timestamp = loaded_data.get("last_changed_timestamp", pi_cpu_last_received_timestamp)
                 logger.info(f"Pi CPU temperature restored: {current_pi_cpu_temperature}°C")
                 data_was_loaded = True
-    except Exception as e: logger.error(f"Pi CPU temperature data restoration error: {e}")
+    except Exception as e:
+        logger.error(f"Pi CPU temperature data restoration error: {e}")
     try:
         if os.path.exists(ENVIRONMENT_TEMPERATURE_FILE_PATH):
             loaded_data = load_data_from_json_file(ENVIRONMENT_TEMPERATURE_FILE_PATH)
@@ -358,7 +288,8 @@ def load_saved_all_mqtt_data():
                 environment_temperature_last_changed_timestamp = loaded_data.get("last_changed_timestamp", environment_temperature_last_received_timestamp)
                 logger.info(f"Environment temperature restored: {current_environment_temperature}°C")
                 data_was_loaded = True
-    except Exception as e: logger.error(f"Environment temperature data restoration error: {e}")
+    except Exception as e:
+        logger.error(f"Environment temperature data restoration error: {e}")
     try:
         if os.path.exists(ENVIRONMENT_HUMIDITY_FILE_PATH):
             loaded_data = load_data_from_json_file(ENVIRONMENT_HUMIDITY_FILE_PATH)
@@ -368,7 +299,8 @@ def load_saved_all_mqtt_data():
                 environment_humidity_last_changed_timestamp = loaded_data.get("last_changed_timestamp", environment_humidity_last_received_timestamp)
                 logger.info(f"Environment humidity restored: {current_environment_humidity}%")
                 data_was_loaded = True
-    except Exception as e: logger.error(f"Environment humidity data restoration error: {e}")
+    except Exception as e:
+        logger.error(f"Environment humidity data restoration error: {e}")
     try:
         if os.path.exists(CO2_DATA_FILE_PATH):
             loaded_data = load_data_from_json_file(CO2_DATA_FILE_PATH)
@@ -379,7 +311,8 @@ def load_saved_all_mqtt_data():
                 co2_concentration_last_changed_timestamp = loaded_data.get("last_changed_timestamp", co2_data_last_received_timestamp)
                 logger.info(f"CO2 concentration restored: {current_co2_concentration} ppm")
                 data_was_loaded = True
-    except Exception as e: logger.error(f"CO2 concentration data restoration error: {e}")
+    except Exception as e:
+        logger.error(f"CO2 concentration data restoration error: {e}")
     try:
         if os.path.exists(THI_DATA_FILE_PATH):
             loaded_data = load_data_from_json_file(THI_DATA_FILE_PATH)
@@ -390,7 +323,8 @@ def load_saved_all_mqtt_data():
                 thi_value_last_changed_timestamp = loaded_data.get("last_changed_timestamp", thi_data_last_received_timestamp)
                 logger.info(f"THI restored: {current_thi_value}")
                 data_was_loaded = True
-    except Exception as e: logger.error(f"THI data restoration error: {e}")
+    except Exception as e:
+        logger.error(f"THI data restoration error: {e}")
     return not data_was_loaded
 
 @dataclass
@@ -439,12 +373,11 @@ class EnvironmentalDataDisplaySystem:
             "Humidity": SensorGaugeRange(0.0, 100.0, "%"),
             "Pi_CPU": SensorGaugeRange(30.0, 60.0, "°C")
         }
-        # 行構成を変更：QZSSの単独行を削除し、RAIN用の空行を確保。Pi行はQZSSを併記表示。
         self.display_item_definitions = [
             ("Temperature", "Temp:", "current_environment_temperature", "environment_temperature_last_changed_timestamp", "°C", "{:5.1f}"),
             ("Humidity",    "Hum:",  "current_environment_humidity",   "environment_humidity_last_changed_timestamp",   "%",  "{:5.1f}"),
-            ("PiQZSS",      "RPi5:", "",                               "",                                               "",  ""),  # Pi + QZSS の複合行（ゲージはPiのみ任意）
-            ("BLANK",       "",      "",                               "",                                               "",  ""),  # ← レインセンサー用に空ける
+            ("PiQZSS",      "Pi5:",  "",                               "",                                               "",  ""),
+            ("BLANK",       "",      "",                               "",                                               "",  ""),
             ("THI_CO2",     "THI:",  "combined_thi_co2",               "",                                               "",  "")
         ]
 
@@ -474,13 +407,7 @@ class EnvironmentalDataDisplaySystem:
                 return f"{display_label}{current_thi_value:.1f} / CO2:{current_co2_concentration:.0f}ppm"
 
     def _get_combined_pi_and_qzss_text(self, display_label: str) -> Tuple[str, Optional[float]]:
-        """
-        RPi5 と QZSS の温度を同一行で表示する。
-        表記: 'RPi5: XX.X℃ / QZSS: ZZ.Z℃'
-        戻り値: (表示用テキスト, Pi温度(ゲージ用) or None)
-        """
         with data_lock:
-            # Pi
             pi_stale_by_no_change = (pi_cpu_last_changed_timestamp is not None and time.time() - pi_cpu_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
             if current_pi_cpu_temperature is None or pi_stale_by_no_change:
                 pi_text = "ERROR"
@@ -488,20 +415,18 @@ class EnvironmentalDataDisplaySystem:
             else:
                 pi_text = f"{current_pi_cpu_temperature:.1f}℃"
                 pi_for_gauge = current_pi_cpu_temperature
-
-            # QZSS（行は削除済みだが値はここで併記表示）
             qzss_stale_by_no_change = (mqtt_qzss_cpu_last_changed_timestamp is not None and time.time() - mqtt_qzss_cpu_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
             if current_mqtt_qzss_cpu_temperature is None or qzss_stale_by_no_change:
                 qzss_text = "ERROR"
             else:
                 qzss_text = f"{current_mqtt_qzss_cpu_temperature:.1f}℃"
-
             text = f"{display_label} {pi_text} / QZSS: {qzss_text}"
             return text, pi_for_gauge
 
     def _convert_value_to_gauge_ratio(self, sensor_value: float, gauge_range: SensorGaugeRange) -> float:
         value_range = gauge_range.maximum_value - gauge_range.minimum_value
-        if value_range == 0: return 0.0
+        if value_range == 0:
+            return 0.0
         normalized_value = (sensor_value - gauge_range.minimum_value) / value_range
         return max(0.0, min(1.0, normalized_value))
 
@@ -518,22 +443,18 @@ class EnvironmentalDataDisplaySystem:
         if not is_dump1090_ok:
             alert_image = Image.new('1', image_size, 255)
             draw_alert = ImageDraw.Draw(alert_image)
-
             try:
                 alert_font_big = ImageFont.truetype(self.system_config.display_font_file_path, 24)
                 alert_font_small = ImageFont.truetype(self.system_config.display_font_file_path, 16)
             except OSError:
                 alert_font_big = ImageFont.load_default()
                 alert_font_small = ImageFont.load_default()
-
             msg1 = "!! ALERT !!"
             msg2 = f"{DUMP1090_SERVICE_NAME}"
             msg3 = "SERVICE DOWN"
-
             draw_alert.text((image_size[0] / 2, 20), msg1, font=alert_font_big, fill=0, anchor="ms")
             draw_alert.text((image_size[0] / 2, 60), msg2, font=alert_font_small, fill=0, anchor="ms")
             draw_alert.text((image_size[0] / 2, 85), msg3, font=alert_font_small, fill=0, anchor="ms")
-
             return alert_image.rotate(90, expand=True)
 
         display_image = Image.new('1', image_size, 255)
@@ -556,23 +477,14 @@ class EnvironmentalDataDisplaySystem:
             for i, (key, label, path, last_changed_ts_path, unit, fmt) in enumerate(self.display_item_definitions):
                 y_pos = i * layout.single_section_height
                 gauge_y = y_pos + (layout.single_section_height - layout.gauge_bar_height) // 2
-
                 if key == "THI_CO2":
                     text = self._get_combined_thi_and_co2_data(label)
                     drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
-
                 elif key == "PiQZSS":
-                    text, pi_for_gauge = self._get_combined_pi_and_qzss_text(label)
+                    text, _ = self._get_combined_pi_and_qzss_text(label)
                     drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
-                    # 必要ならPiのゲージだけ描画（任意）。コメントアウトで無効化可。
-                    if pi_for_gauge is not None:
-                        ratio = self._convert_value_to_gauge_ratio(pi_for_gauge, self.sensor_gauge_ranges["Pi_CPU"])
-                        self._draw_gauge_bar_with_vertical_lines(drawing_context, layout.gauge_bar_start_x, gauge_y, layout.gauge_bar_total_width, layout.gauge_bar_height, ratio)
-
                 elif key == "BLANK":
-                    # ここは将来の RAIN 一行用に空ける。区切り線だけ引いて高さは確保。
                     pass
-
                 else:
                     value = self._extract_sensor_value_from_data(path)
                     last_changed_ts = self._extract_sensor_value_from_data(last_changed_ts_path)
@@ -590,8 +502,6 @@ class EnvironmentalDataDisplaySystem:
                                 layout.gauge_bar_total_width, layout.gauge_bar_height,
                                 self._convert_value_to_gauge_ratio(value, self.sensor_gauge_ranges[key])
                             )
-
-                # セクション下の区切り線（最後以外）
                 if i < len(self.display_item_definitions) - 1:
                     drawing_context.line([(0, y_pos + layout.single_section_height), (image_size[0], y_pos + layout.single_section_height)], fill=0)
 
