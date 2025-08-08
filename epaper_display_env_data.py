@@ -5,8 +5,8 @@
 #
 #   Environmental Data & System Status Display for e-Paper
 #
-#   Version: 1.2
-#   Last Updated: 2025-07-30
+#   Version: 1.3
+#   Last Updated: 2025-08-08
 #
 # =================================================================================================
 #
@@ -255,7 +255,7 @@ def handle_mqtt_message_received(client, userdata, message):
                     environment_humidity_last_changed_timestamp = received_timestamp
                 current_environment_humidity = new_humidity
                 environment_humidity_last_received_timestamp = received_timestamp
-                save_data_to_json_file(ENVIRONMENT_HUMIDITY_FILE_PATH, {"humidity": current_environment_humidity, "timestamp": received_timestamp, "last_changed_timestamp": environment_humidity_last_changed_timestamp})
+                save_data_to_json_file(ENVIRONMENT_HUMIDITY_FILE_PATH, {"humidity": current_environment_humidity, "timestamp": environment_humidity_last_received_timestamp, "last_changed_timestamp": environment_humidity_last_changed_timestamp})
                 logger.info(f"MQTT environment data received - Temperature: {current_environment_temperature}°C, Humidity: {current_environment_humidity}%")
             elif message.topic == MQTT_TOPIC_CO2_DATA:
                 payload_dict = json.loads(payload_str)
@@ -266,7 +266,7 @@ def handle_mqtt_message_received(client, userdata, message):
                     current_co2_concentration = new_co2
                     co2_data_last_received_timestamp = received_timestamp
                     co2_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(CO2_DATA_FILE_PATH, {"co2": current_co2_concentration, "timestamp": co2_data_source_timestamp, "last_update": co2_data_last_received_timestamp, "last_changed_timestamp": co2_concentration_last_changed_timestamp})
+                    save_data_to_json_file(CO2_DATA_FILE_PATH, {"co2": current_co2_concentration, "timestamp": co2_data_source_timestamp, "last_update": co2_data_last_received_timestamp, "last_changed_timestamp": co2_concentration_last_changed_t[118;1:3uimestamp})
                     logger.info(f"MQTT CO2 concentration received: {current_co2_concentration} ppm")
             elif message.topic == MQTT_TOPIC_SENSOR_DATA:
                 payload_dict = json.loads(payload_str)
@@ -437,15 +437,15 @@ class EnvironmentalDataDisplaySystem:
         self.sensor_gauge_ranges = {
             "Temperature": SensorGaugeRange(-10.0, 50.0, "°C"),
             "Humidity": SensorGaugeRange(0.0, 100.0, "%"),
-            "QZSS_CPU": SensorGaugeRange(30.0, 60.0, "°C"),
             "Pi_CPU": SensorGaugeRange(30.0, 60.0, "°C")
         }
+        # 行構成を変更：QZSSの単独行を削除し、RAIN用の空行を確保。Pi行はQZSSを併記表示。
         self.display_item_definitions = [
             ("Temperature", "Temp:", "current_environment_temperature", "environment_temperature_last_changed_timestamp", "°C", "{:5.1f}"),
-            ("Humidity", "Hum:", "current_environment_humidity", "environment_humidity_last_changed_timestamp", "%", "{:5.1f}"),
-            ("QZSS_CPU", "QZSS:", "current_mqtt_qzss_cpu_temperature", "mqtt_qzss_cpu_last_changed_timestamp", "°C", "{:5.1f}"),
-            ("Pi_CPU", "Pi5:", "current_pi_cpu_temperature", "pi_cpu_last_changed_timestamp", "°C", "{:5.1f}"),
-            ("THI_CO2", "THI:", "combined_thi_co2", "", "", "")
+            ("Humidity",    "Hum:",  "current_environment_humidity",   "environment_humidity_last_changed_timestamp",   "%",  "{:5.1f}"),
+            ("PiQZSS",      "RPi5:", "",                               "",                                               "",  ""),  # Pi + QZSS の複合行（ゲージはPiのみ任意）
+            ("BLANK",       "",      "",                               "",                                               "",  ""),  # ← レインセンサー用に空ける
+            ("THI_CO2",     "THI:",  "combined_thi_co2",               "",                                               "",  "")
         ]
 
     def _extract_sensor_value_from_data(self, data_path: str) -> Optional[float]:
@@ -473,6 +473,32 @@ class EnvironmentalDataDisplaySystem:
             else:
                 return f"{display_label}{current_thi_value:.1f} / CO2:{current_co2_concentration:.0f}ppm"
 
+    def _get_combined_pi_and_qzss_text(self, display_label: str) -> Tuple[str, Optional[float]]:
+        """
+        RPi5 と QZSS の温度を同一行で表示する。
+        表記: 'RPi5: XX.X℃ / QZSS: ZZ.Z℃'
+        戻り値: (表示用テキスト, Pi温度(ゲージ用) or None)
+        """
+        with data_lock:
+            # Pi
+            pi_stale_by_no_change = (pi_cpu_last_changed_timestamp is not None and time.time() - pi_cpu_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
+            if current_pi_cpu_temperature is None or pi_stale_by_no_change:
+                pi_text = "ERROR"
+                pi_for_gauge = None
+            else:
+                pi_text = f"{current_pi_cpu_temperature:.1f}℃"
+                pi_for_gauge = current_pi_cpu_temperature
+
+            # QZSS（行は削除済みだが値はここで併記表示）
+            qzss_stale_by_no_change = (mqtt_qzss_cpu_last_changed_timestamp is not None and time.time() - mqtt_qzss_cpu_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
+            if current_mqtt_qzss_cpu_temperature is None or qzss_stale_by_no_change:
+                qzss_text = "ERROR"
+            else:
+                qzss_text = f"{current_mqtt_qzss_cpu_temperature:.1f}℃"
+
+            text = f"{display_label} {pi_text} / QZSS: {qzss_text}"
+            return text, pi_for_gauge
+
     def _convert_value_to_gauge_ratio(self, sensor_value: float, gauge_range: SensorGaugeRange) -> float:
         value_range = gauge_range.maximum_value - gauge_range.minimum_value
         if value_range == 0: return 0.0
@@ -492,7 +518,7 @@ class EnvironmentalDataDisplaySystem:
         if not is_dump1090_ok:
             alert_image = Image.new('1', image_size, 255)
             draw_alert = ImageDraw.Draw(alert_image)
-            
+
             try:
                 alert_font_big = ImageFont.truetype(self.system_config.display_font_file_path, 24)
                 alert_font_small = ImageFont.truetype(self.system_config.display_font_file_path, 16)
@@ -530,20 +556,45 @@ class EnvironmentalDataDisplaySystem:
             for i, (key, label, path, last_changed_ts_path, unit, fmt) in enumerate(self.display_item_definitions):
                 y_pos = i * layout.single_section_height
                 gauge_y = y_pos + (layout.single_section_height - layout.gauge_bar_height) // 2
+
                 if key == "THI_CO2":
                     text = self._get_combined_thi_and_co2_data(label)
+                    drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
+
+                elif key == "PiQZSS":
+                    text, pi_for_gauge = self._get_combined_pi_and_qzss_text(label)
+                    drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
+                    # 必要ならPiのゲージだけ描画（任意）。コメントアウトで無効化可。
+                    if pi_for_gauge is not None:
+                        ratio = self._convert_value_to_gauge_ratio(pi_for_gauge, self.sensor_gauge_ranges["Pi_CPU"])
+                        self._draw_gauge_bar_with_vertical_lines(drawing_context, layout.gauge_bar_start_x, gauge_y, layout.gauge_bar_total_width, layout.gauge_bar_height, ratio)
+
+                elif key == "BLANK":
+                    # ここは将来の RAIN 一行用に空ける。区切り線だけ引いて高さは確保。
+                    pass
+
                 else:
                     value = self._extract_sensor_value_from_data(path)
                     last_changed_ts = self._extract_sensor_value_from_data(last_changed_ts_path)
                     is_stale_by_no_change = (last_changed_ts is not None and time.time() - last_changed_ts > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
                     if value is None or is_stale_by_no_change:
                         text = f"{label}ERROR"
+                        drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
                     else:
                         text = f"{label}{fmt.format(value)}{unit}"
-                        self._draw_gauge_bar_with_vertical_lines(drawing_context, layout.gauge_bar_start_x, gauge_y, layout.gauge_bar_total_width, layout.gauge_bar_height, self._convert_value_to_gauge_ratio(value, self.sensor_gauge_ranges[key]))
-                drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
+                        drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
+                        if key in self.sensor_gauge_ranges:
+                            self._draw_gauge_bar_with_vertical_lines(
+                                drawing_context,
+                                layout.gauge_bar_start_x, gauge_y,
+                                layout.gauge_bar_total_width, layout.gauge_bar_height,
+                                self._convert_value_to_gauge_ratio(value, self.sensor_gauge_ranges[key])
+                            )
+
+                # セクション下の区切り線（最後以外）
                 if i < len(self.display_item_definitions) - 1:
                     drawing_context.line([(0, y_pos + layout.single_section_height), (image_size[0], y_pos + layout.single_section_height)], fill=0)
+
         return display_image.rotate(90, expand=True)
 
     def update_display_with_current_data(self):
@@ -595,3 +646,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
