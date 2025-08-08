@@ -25,3 +25,5 @@ __pycache__/
 .vscode/
 .idea/
 
+
+scan_secrets.sh
