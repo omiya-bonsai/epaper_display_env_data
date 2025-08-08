@@ -1,58 +1,54 @@
-# e-Paper 環境・システム監視ディスプレイ 🛰️
+# e-Paper 環境・システム・気象監視ディスプレイ 🌦️🛰️
 
-このプロジェクトは、Raspberry Piに接続されたe-Paper（電子ペーパー）ディスプレイに、MQTT経由で受信した各種センサーデータと、指定したシステムサービスの状態を定期的に表示するアプリケーションです。
+このプロジェクトは、Raspberry Piに接続されたe-Paper（電子ペーパー）ディスプレイに、MQTT経由で受信した各種センサーデータやシステム状態、そしてレインセンサーによる雨検知情報を定期的に表示するアプリケーションです。
 
-ヘッドレスで運用しているサーバーの状態を、低消費電力なディスプレイで視覚的に一目で把握することを目的としています。
-
-![IMG_7547](https://github.com/user-attachments/assets/b0db008a-307a-4fb2-8fb7-a8c1216abc48)
-
-![IMG_7548](https://github.com/user-attachments/assets/2a77b8f5-5b28-40fd-b7c6-fa247a62c7a4)
+低消費電力な電子ペーパーを活用し、ヘッドレス運用中のサーバーや環境・気象状態を一目で把握できます。
 
 ---
 
 ## ✨ 主な機能
 
-* **環境データの可視化**: MQTTで受信した温度、湿度、CPU温度、CO2濃度、不快指数(THI)などのデータを表示します。
-* **システム監視**: `.env`ファイルで指定した`systemd`サービス（例: `dump1090-fa.service`）の稼働状況を監視します。
-* **異常検知アラート**: 監視対象のサービスが停止した場合、通常の表示を中断し、画面全体で警告メッセージを表示します。
-* **データ永続化**: 受信した最新データをJSONファイルに保存し、スクリプト再起動時に状態を復元します。
-* **柔軟な設定**: 接続先や監視対象、表示間隔などを`.env`ファイルで簡単に変更できます。
+* **環境データの可視化**  
+  MQTTで受信した温度、湿度、CO2濃度、不快指数(THI)、CPU温度などを表示します。
+* **気象監視（レインセンサー統合）**  
+  降雨検知、結露検知、ノイズ異常、ケーブル接続異常、オフラインなどの状態を1行で表示します。  
+  状態が正常なら「OK」表記、降雨中は「RAIN」、その他異常は簡潔なアラート表記に切り替わります。
+* **システム監視**  
+  `.env`で指定した`systemd`サービス（例: ADS-Bデコーダー）やPi5のCPU/MEM使用率などを監視します。
+* **異常検知アラート**  
+  監視対象サービスが停止すると、通常の情報表示を中断し全画面警告を表示します。
+* **データ永続化**  
+  最新データをJSONファイルに保存し、スクリプト再起動時に状態を復元します。
+* **柔軟な設定**  
+  接続先や表示内容、更新間隔などを`.env`で簡単に変更できます。
 
 ---
 
 ## 🛠️ セットアップ
 
-### 1. 必要条件
+### 必要条件
 
-* **ハードウェア**:
-    * Raspberry Pi （または同様のLinux環境）
-    * e-Paper ディスプレイ（[Waveshare](https://www.waveshare.com/2.13inch-e-paper-hat-plus.htm)製など）
-* **ソフトウェア**:
-    * Python 3
-    * Git
+* **ハードウェア**
+  * Raspberry Pi（Zero 2 W〜5推奨）
+  * e-Paperディスプレイ（例: Waveshare 2.13inch）
+  * （オプション）雨量・結露センサー
+* **ソフトウェア**
+  * Python 3
+  * Git
 
-### 2. インストール手順
+### インストール手順
 
-1.  **リポジトリをクローンします。**
-    ```bash
-    git clone https://github.com/omiya-bonsai/epaper_display_env_data.git
-    cd epaper_display_env_data
-    ```
+```bash
+git clone https://github.com/omiya-bonsai/epaper_display_env_data.git
+cd epaper_display_env_data
+python3 -m venv eink
+source eink/bin/activate
+pip install -r requirements.txt
+````
 
-2.  **Python仮想環境を作成し、有効化します。**
-    ```bash
-    python3 -m venv eink
-    source eink/bin/activate
-    ```
+---
 
-3.  **必要なライブラリをインストールします。**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-### 3. `requirements.txt` の内容
-
-このプロジェクトで使われる主なライブラリです。`requirements.txt`という名前で保存してください。
+## `requirements.txt` の例
 
 ```txt
 paho-mqtt
@@ -60,115 +56,112 @@ pillow
 python-dotenv
 # e-Paperのモデルに応じたドライバライブラリ
 # 例: waveshare-epd
-````
+```
 
-### 4\. 設定ファイルの作成
+---
 
-`.env.example`を参考に、`.env`ファイルを作成します。
-
-1.  設定ファイルを作成します。
-
-    ```bash
-    cp .env.example .env
-    ```
-
-2.  `vim`エディタで`.env`ファイルを開き、ご自身の環境に合わせて値を編集します。
-
-    ```bash
-    vim .env
-    ```
-
-#### `.env.example` （設定例）
+## `.env` 設定例
 
 ```dotenv
-# --- MQTT Broker Settings ---
-MQTT_BROKER_IP_ADDRESS="192.168.1.10"
+# --- MQTT Broker ---
+MQTT_BROKER_IP_ADDRESS="192.168.x.x"
 MQTT_BROKER_PORT=1883
 
 # --- MQTT Topics ---
-MQTT_TOPIC_QZSS_CPU_TEMP="sensors/qzss/cpu_temp"
+MQTT_TOPIC_ADS_CPU_TEMP="sensors/ads/cpu_temp"
 MQTT_TOPIC_PI_CPU_TEMP="sensors/pi/cpu_temp"
 MQTT_TOPIC_ENV4="sensors/environment/bme280"
 MQTT_TOPIC_CO2_DATA="sensors/environment/co2"
 MQTT_TOPIC_SENSOR_DATA="sensors/environment/thi"
+MQTT_TOPIC_RAIN_SENSOR="home/weather/rain_sensor"
 
-# --- System Service Monitoring ---
-# 監視したいsystemdサービスの名前
+# --- System Service ---
 DUMP1090_SERVICE_NAME="dump1090-fa.service"
 
-# --- Display Settings ---
-# e-Paperのモデル名（例: epd2in13_V4）
+# --- Display ---
 EPAPER_DISPLAY_TYPE="epd2in13_V4"
-# 表示更新の間隔（秒）
 DISPLAY_UPDATE_INTERVAL_SECONDS=300
-# 使用するフォントのパス
 DISPLAY_FONT_FILE_PATH="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 DISPLAY_FONT_SIZE_PIXELS=16
 
-# --- Data Persistence ---
-# データ保存先のベースディレクトリ
+# --- Data Storage ---
 BASE_DIRECTORY="/home/bonsai/python3/e-ink/data"
 ```
 
------
+---
 
-## 🚀 使い方
+## 🚀 実行方法
 
-このスクリプトは、`systemd`を使ってバックグラウンドで常時実行させることを想定しています。
+サービス登録例：
 
-### サービスとして登録
+```bash
+sudo vim /etc/systemd/system/epaper_disp.service
+```
 
-1.  `systemd`のサービスファイルを作成します。
+```ini
+[Unit]
+Description=E-Paper Display Environment & Weather Monitor
+After=network.target
 
-    ```bash
-    sudo vim /etc/systemd/system/epaper_disp.service
-    ```
+[Service]
+Type=simple
+User=bonsai
+WorkingDirectory=/home/bonsai/python3/e-ink
+ExecStart=/home/bonsai/python3/e-ink/eink/bin/python /home/bonsai/python3/e-ink/epaper_display_env_data.py
+Restart=always
 
-2.  以下の内容を貼り付け、`User`と`WorkingDirectory`/`ExecStart`のパスを環境に合わせて修正します。
+[Install]
+WantedBy=multi-user.target
+```
 
-    ```ini
-    [Unit]
-    Description=E-Paper Display Environment Data Service
-    After=network.target
+サービス起動：
 
-    [Service]
-    Type=simple
-    User=bonsai
-    WorkingDirectory=/home/bonsai/python3/e-ink
-    ExecStart=/home/bonsai/python3/e-ink/eink/bin/python /home/bonsai/python3/e-ink/epaper_display_env_data.py
-    Restart=always
+```bash
+sudo systemctl enable --now epaper_disp.service
+```
 
-    [Install]
-    WantedBy=multi-user.target
-    ```
+---
 
-    *注意: `ExecStart`には仮想環境内のPythonを指定するのが確実です。*
+## 📡 表示仕様
 
-### サービスの操作
+| 行 | 表示内容                             |
+| - | -------------------------------- |
+| 1 | 温度 / 湿度                          |
+| 2 | CO2濃度                            |
+| 3 | ADS CPU温度 / サービス稼働状況             |
+| 4 | Pi5 CPU温度 / 使用率（"/"区切り）          |
+| 5 | RAINステータス（雨・結露・ノイズ・ケーブル異常・オフライン） |
+| 6 | THI（不快指数）                        |
 
-  * **サービスの有効化と初回起動:**
-    ```bash
-    sudo systemctl enable --now epaper_disp.service
-    ```
-  * **サービスの停止:**
-    ```bash
-    sudo systemctl stop epaper_disp.service
-    ```
-  * **サービスの再起動:**
-    ```bash
-    sudo systemctl restart epaper_disp.service
-    ```
-  * **サービスの稼働状況確認:**
-    ```bash
-    systemctl status epaper_disp.service
-    ```
-  * **ログのリアルタイム確認:**
-    ```bash
-    journalctl -f -u epaper_disp.service
-    ```
+---
 
------
+## 🌧️ RAIN行のステータス一覧
+
+レインセンサーは以下の状態を1行で表示します。
+
+| 表記例            | 意味                   |
+| -------------- | -------------------- |
+| `RAIN`         | 雨を検知中                |
+| `DEW`          | 結露を検知                |
+| `NOISE`        | ノイズ多発（測定値が不安定）       |
+| `CABLE MISS`   | ケーブル接続異常             |
+| `OFFLINE MISS` | デバイスからのデータが途絶（オフライン） |
+| `OK`           | すべて正常                |
+| `INIT...`      | データ未取得だが更新間隔内（初期化中）  |
+
+※ 異常は複合表示される場合があります（例: `RAIN / NOISE`）
+
+---
+
+## 💡 運用ヒント
+
+* 湿度（Hum）はすでに上段行に表示されるため、RAIN行では重複表示しません。
+* ディスプレイの文字数制限に合わせて全行はみ出さないよう調整されています。
+* Pi5行は`/`で各値を区切るため、THI行と視覚的に揃います。
+
+---
 
 ## 📄 ライセンス
 
 このプロジェクトは LICENSE ファイルの下で公開されています。
+
