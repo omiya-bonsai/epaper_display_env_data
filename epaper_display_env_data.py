@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 DATA_STALENESS_THRESHOLD_SECONDS = int(os.getenv('DATA_STALENESS_THRESHOLD_SECONDS', 5400))
 NO_CHANGE_ERROR_THRESHOLD_SECONDS = 3600
+RAIN_ONLINE_THRESHOLD_SECONDS = int(os.getenv('RAIN_ONLINE_THRESHOLD_SECONDS', 90))
+PRERAIN_THRESHOLD_PERCENT = float(os.getenv('PRERAIN_THRESHOLD_PERCENT', 3.0))
+DEW_THRESHOLD_PERCENT = float(os.getenv('DEW_THRESHOLD_PERCENT', 2.0))
 MQTT_BROKER_IP_ADDRESS = os.getenv('MQTT_BROKER_IP_ADDRESS', "localhost")
 MQTT_BROKER_PORT = int(os.getenv('MQTT_BROKER_PORT', 1883))
 MQTT_KEEPALIVE = int(os.getenv('MQTT_KEEPALIVE', 60))
@@ -38,6 +41,7 @@ MQTT_TOPIC_PI_CPU_TEMP = os.getenv('MQTT_TOPIC_PI_CPU_TEMP')
 MQTT_TOPIC_ENV4 = os.getenv('MQTT_TOPIC_ENV4')
 MQTT_TOPIC_CO2_DATA = os.getenv('MQTT_TOPIC_CO2_DATA')
 MQTT_TOPIC_SENSOR_DATA = os.getenv('MQTT_TOPIC_SENSOR_DATA')
+MQTT_TOPIC_RAIN = os.getenv('MQTT_TOPIC_RAIN', 'home/weather/rain_sensor')
 BASE_DIRECTORY = os.getenv('BASE_DIRECTORY', '.')
 QZSS_TEMPERATURE_FILE_PATH = os.path.join(BASE_DIRECTORY, 'qzss_temperature.json')
 PI_TEMPERATURE_FILE_PATH = os.path.join(BASE_DIRECTORY, 'pi_temperature.json')
@@ -45,6 +49,7 @@ ENVIRONMENT_TEMPERATURE_FILE_PATH = os.path.join(BASE_DIRECTORY, 'env_temperatur
 ENVIRONMENT_HUMIDITY_FILE_PATH = os.path.join(BASE_DIRECTORY, 'env_humidity.json')
 CO2_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'co2_data.json')
 THI_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'thi_data.json')
+RAIN_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'rain_data.json')
 DUMP1090_SERVICE_NAME = os.getenv('DUMP1090_SERVICE_NAME', 'dump1090-fa.service')
 
 current_mqtt_qzss_cpu_temperature: Optional[float] = None
@@ -67,6 +72,20 @@ current_thi_value: Optional[float] = None
 thi_data_last_received_timestamp: Optional[float] = None
 thi_data_source_timestamp: Optional[float] = None
 thi_value_last_changed_timestamp: Optional[float] = None
+
+rain_id: Optional[str] = None
+rain_baseline: Optional[float] = None
+rain_current: Optional[float] = None
+rain_change: Optional[float] = None
+rain_flag: Optional[bool] = None
+rain_method: Optional[int] = None
+rain_uptime: Optional[float] = None
+rain_cable_ok: Optional[bool] = None
+rain_errors: Optional[int] = None
+rain_source_timestamp: Optional[float] = None
+rain_last_received_timestamp: Optional[float] = None
+rain_prev_uptime: Optional[float] = None
+
 data_lock = threading.Lock()
 
 def check_systemd_service_status(service_name: str) -> bool:
@@ -90,6 +109,7 @@ def handle_mqtt_connection(client, userdata, flags, result_code):
         if MQTT_TOPIC_ENV4: client.subscribe(MQTT_TOPIC_ENV4)
         if MQTT_TOPIC_CO2_DATA: client.subscribe(MQTT_TOPIC_CO2_DATA)
         if MQTT_TOPIC_SENSOR_DATA: client.subscribe(MQTT_TOPIC_SENSOR_DATA)
+        if MQTT_TOPIC_RAIN: client.subscribe(MQTT_TOPIC_RAIN)
         logger.info("Started subscribing to all specified topics")
     else:
         logger.error(f"MQTT connection failed, return code: {result_code}")
@@ -101,6 +121,7 @@ def handle_mqtt_message_received(client, userdata, message):
     global current_environment_humidity, environment_humidity_last_received_timestamp, environment_humidity_last_changed_timestamp
     global current_co2_concentration, co2_data_last_received_timestamp, co2_data_source_timestamp, co2_concentration_last_changed_timestamp
     global current_thi_value, thi_data_last_received_timestamp, thi_data_source_timestamp, thi_value_last_changed_timestamp
+    global rain_id, rain_baseline, rain_current, rain_change, rain_flag, rain_method, rain_uptime, rain_cable_ok, rain_errors, rain_source_timestamp, rain_last_received_timestamp, rain_prev_uptime
     received_timestamp = time.time()
     try:
         payload_str = message.payload.decode('utf-8', errors='ignore')
@@ -122,7 +143,7 @@ def handle_mqtt_message_received(client, userdata, message):
                         "last_changed_timestamp": mqtt_qzss_cpu_last_changed_timestamp
                     }
                 )
-                logger.info(f"MQTT QZSS CPU temperature received: {current_mqtt_qzss_cpu_temperature}°C")
+                logger.info(f"MQTT ADS CPU temperature received: {current_mqtt_qzss_cpu_temperature}°C")
             elif message.topic == MQTT_TOPIC_PI_CPU_TEMP:
                 match = re.search(r"temp=(\d+\.?\d*)", payload_str)
                 if match:
@@ -207,6 +228,38 @@ def handle_mqtt_message_received(client, userdata, message):
                         }
                     )
                     logger.info(f"MQTT THI data received: {current_thi_value}")
+            elif message.topic == MQTT_TOPIC_RAIN:
+                payload = json.loads(payload_str)
+                rain_prev_uptime = rain_uptime
+                rain_id = payload.get("id")
+                rain_baseline = float(payload.get("baseline")) if payload.get("baseline") is not None else None
+                rain_current = float(payload.get("current")) if payload.get("current") is not None else None
+                rain_change = float(payload.get("change")) if payload.get("change") is not None else None
+                rain_flag = bool(payload.get("rain")) if payload.get("rain") is not None else None
+                rain_method = int(payload.get("method")) if payload.get("method") is not None else None
+                rain_uptime = float(payload.get("uptime")) if payload.get("uptime") is not None else None
+                rain_cable_ok = bool(payload.get("cable_ok")) if payload.get("cable_ok") is not None else None
+                rain_errors = int(payload.get("errors")) if payload.get("errors") is not None else None
+                rain_source_timestamp = float(payload.get("timestamp")) if payload.get("timestamp") is not None else None
+                rain_last_received_timestamp = received_timestamp
+                save_data_to_json_file(
+                    RAIN_DATA_FILE_PATH,
+                    {
+                        "id": rain_id,
+                        "baseline": rain_baseline,
+                        "current": rain_current,
+                        "change": rain_change,
+                        "rain": rain_flag,
+                        "method": rain_method,
+                        "uptime": rain_uptime,
+                        "cable_ok": rain_cable_ok,
+                        "errors": rain_errors,
+                        "timestamp": rain_source_timestamp,
+                        "last_update": rain_last_received_timestamp,
+                        "prev_uptime": rain_prev_uptime
+                    }
+                )
+                logger.info("MQTT RAIN data received")
     except Exception as e:
         logger.error(f"Error during MQTT message processing: {e}")
 
@@ -255,6 +308,7 @@ def load_saved_all_mqtt_data():
     global current_environment_humidity, environment_humidity_last_received_timestamp, environment_humidity_last_changed_timestamp
     global current_co2_concentration, co2_data_last_received_timestamp, co2_data_source_timestamp, co2_concentration_last_changed_timestamp
     global current_thi_value, thi_data_last_received_timestamp, thi_data_source_timestamp, thi_value_last_changed_timestamp
+    global rain_id, rain_baseline, rain_current, rain_change, rain_flag, rain_method, rain_uptime, rain_cable_ok, rain_errors, rain_source_timestamp, rain_last_received_timestamp, rain_prev_uptime
     os.makedirs(BASE_DIRECTORY, exist_ok=True)
     data_was_loaded = False
     try:
@@ -264,10 +318,9 @@ def load_saved_all_mqtt_data():
                 current_mqtt_qzss_cpu_temperature = loaded_data.get("temperature")
                 mqtt_qzss_cpu_last_received_timestamp = loaded_data.get("timestamp")
                 mqtt_qzss_cpu_last_changed_timestamp = loaded_data.get("last_changed_timestamp", mqtt_qzss_cpu_last_received_timestamp)
-                logger.info(f"QZSS CPU temperature restored: {current_mqtt_qzss_cpu_temperature}°C")
                 data_was_loaded = True
     except Exception as e:
-        logger.error(f"QZSS CPU temperature data restoration error: {e}")
+        logger.error(f"ADS CPU temperature data restoration error: {e}")
     try:
         if os.path.exists(PI_TEMPERATURE_FILE_PATH):
             loaded_data = load_data_from_json_file(PI_TEMPERATURE_FILE_PATH)
@@ -275,7 +328,6 @@ def load_saved_all_mqtt_data():
                 current_pi_cpu_temperature = loaded_data.get("temperature")
                 pi_cpu_last_received_timestamp = loaded_data.get("timestamp")
                 pi_cpu_last_changed_timestamp = loaded_data.get("last_changed_timestamp", pi_cpu_last_received_timestamp)
-                logger.info(f"Pi CPU temperature restored: {current_pi_cpu_temperature}°C")
                 data_was_loaded = True
     except Exception as e:
         logger.error(f"Pi CPU temperature data restoration error: {e}")
@@ -286,7 +338,6 @@ def load_saved_all_mqtt_data():
                 current_environment_temperature = loaded_data.get("temperature")
                 environment_temperature_last_received_timestamp = loaded_data.get("timestamp")
                 environment_temperature_last_changed_timestamp = loaded_data.get("last_changed_timestamp", environment_temperature_last_received_timestamp)
-                logger.info(f"Environment temperature restored: {current_environment_temperature}°C")
                 data_was_loaded = True
     except Exception as e:
         logger.error(f"Environment temperature data restoration error: {e}")
@@ -297,7 +348,6 @@ def load_saved_all_mqtt_data():
                 current_environment_humidity = loaded_data.get("humidity")
                 environment_humidity_last_received_timestamp = loaded_data.get("timestamp")
                 environment_humidity_last_changed_timestamp = loaded_data.get("last_changed_timestamp", environment_humidity_last_received_timestamp)
-                logger.info(f"Environment humidity restored: {current_environment_humidity}%")
                 data_was_loaded = True
     except Exception as e:
         logger.error(f"Environment humidity data restoration error: {e}")
@@ -309,7 +359,6 @@ def load_saved_all_mqtt_data():
                 co2_data_source_timestamp = loaded_data.get("timestamp")
                 co2_data_last_received_timestamp = loaded_data.get("last_update")
                 co2_concentration_last_changed_timestamp = loaded_data.get("last_changed_timestamp", co2_data_last_received_timestamp)
-                logger.info(f"CO2 concentration restored: {current_co2_concentration} ppm")
                 data_was_loaded = True
     except Exception as e:
         logger.error(f"CO2 concentration data restoration error: {e}")
@@ -321,10 +370,28 @@ def load_saved_all_mqtt_data():
                 thi_data_source_timestamp = loaded_data.get("timestamp")
                 thi_data_last_received_timestamp = loaded_data.get("last_update")
                 thi_value_last_changed_timestamp = loaded_data.get("last_changed_timestamp", thi_data_last_received_timestamp)
-                logger.info(f"THI restored: {current_thi_value}")
                 data_was_loaded = True
     except Exception as e:
         logger.error(f"THI data restoration error: {e}")
+    try:
+        if os.path.exists(RAIN_DATA_FILE_PATH):
+            loaded_data = load_data_from_json_file(RAIN_DATA_FILE_PATH)
+            if loaded_data:
+                rain_id = loaded_data.get("id")
+                rain_baseline = loaded_data.get("baseline")
+                rain_current = loaded_data.get("current")
+                rain_change = loaded_data.get("change")
+                rain_flag = loaded_data.get("rain")
+                rain_method = loaded_data.get("method")
+                rain_uptime = loaded_data.get("uptime")
+                rain_cable_ok = loaded_data.get("cable_ok")
+                rain_errors = loaded_data.get("errors")
+                rain_source_timestamp = loaded_data.get("timestamp")
+                rain_last_received_timestamp = loaded_data.get("last_update")
+                rain_prev_uptime = loaded_data.get("prev_uptime")
+                data_was_loaded = True
+    except Exception as e:
+        logger.error(f"RAIN data restoration error: {e}")
     return not data_was_loaded
 
 @dataclass
@@ -376,8 +443,8 @@ class EnvironmentalDataDisplaySystem:
         self.display_item_definitions = [
             ("Temperature", "Temp:", "current_environment_temperature", "environment_temperature_last_changed_timestamp", "°C", "{:5.1f}"),
             ("Humidity",    "Hum:",  "current_environment_humidity",   "environment_humidity_last_changed_timestamp",   "%",  "{:5.1f}"),
-            ("PiQZSS",      "Pi5:",  "",                               "",                                               "",  ""),
-            ("BLANK",       "",      "",                               "",                                               "",  ""),
+            ("PiADS",       "Pi5:",  "",                               "",                                               "",  ""),
+            ("RAIN",        "",      "",                               "",                                               "",  ""),
             ("THI_CO2",     "THI:",  "combined_thi_co2",               "",                                               "",  "")
         ]
 
@@ -406,22 +473,75 @@ class EnvironmentalDataDisplaySystem:
             else:
                 return f"{display_label}{current_thi_value:.1f} / CO2:{current_co2_concentration:.0f}ppm"
 
-    def _get_combined_pi_and_qzss_text(self, display_label: str) -> Tuple[str, Optional[float]]:
+    def _get_combined_pi_and_ads_text(self, display_label: str) -> str:
         with data_lock:
             pi_stale_by_no_change = (pi_cpu_last_changed_timestamp is not None and time.time() - pi_cpu_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
             if current_pi_cpu_temperature is None or pi_stale_by_no_change:
                 pi_text = "ERROR"
-                pi_for_gauge = None
             else:
                 pi_text = f"{current_pi_cpu_temperature:.1f}℃"
-                pi_for_gauge = current_pi_cpu_temperature
             qzss_stale_by_no_change = (mqtt_qzss_cpu_last_changed_timestamp is not None and time.time() - mqtt_qzss_cpu_last_changed_timestamp > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
             if current_mqtt_qzss_cpu_temperature is None or qzss_stale_by_no_change:
-                qzss_text = "ERROR"
+                ads_text = "ERROR"
             else:
-                qzss_text = f"{current_mqtt_qzss_cpu_temperature:.1f}℃"
-            text = f"{display_label} {pi_text} / QZSS: {qzss_text}"
-            return text, pi_for_gauge
+                ads_text = f"{current_mqtt_qzss_cpu_temperature:.1f}℃"
+            return f"{display_label}{pi_text} / ADS:{ads_text}"
+
+    def _get_rain_status_text(self) -> str:
+        with data_lock:
+            now = time.time()
+            alerts = []
+            offline = (rain_last_received_timestamp is None) or ((now - rain_last_received_timestamp) > RAIN_ONLINE_THRESHOLD_SECONDS)
+            if offline:
+                alerts.append("OFFLINE")
+                alerts.append("MISS")
+            if rain_cable_ok is False:
+                alerts.append("CAB")
+            if rain_errors is not None and rain_errors > 0:
+                alerts.append("ERR")
+            if rain_prev_uptime is not None and rain_uptime is not None and rain_uptime < rain_prev_uptime:
+                alerts.append("RST")
+            delta_pct = None
+            if rain_baseline and rain_current:
+                try:
+                    delta_pct = (rain_current - rain_baseline) / rain_baseline * 100.0
+                except ZeroDivisionError:
+                    delta_pct = None
+            header = ""
+            if rain_flag is True:
+                header = "RAIN"
+            elif (rain_flag is False or rain_flag is None) and delta_pct is not None and delta_pct >= PRERAIN_THRESHOLD_PERCENT:
+                header = "RAIN→"
+            intensity = ""
+            if header and delta_pct is not None:
+                if delta_pct >= 15:
+                    intensity = " H"
+                elif delta_pct >= 7:
+                    intensity = " M"
+                elif delta_pct >= 3:
+                    intensity = " L"
+            info = []
+            if delta_pct is not None:
+                info.append(f"Δ:{delta_pct:.1f}%")
+            if not header and not alerts:
+                if info:
+                    return "ALL CLEAR " + " ".join(info)
+                return "ALL CLEAR"
+            if header and not alerts:
+                base = header + intensity
+                if info:
+                    return base + " " + " ".join(info)
+                return base
+            if header and alerts:
+                base = header + intensity + " " + " ".join(alerts)
+                if info:
+                    return base + " " + " ".join(info)
+                return base
+            if alerts:
+                if info:
+                    return " ".join(alerts) + " " + " ".join(info)
+                return " ".join(alerts)
+            return "ALL CLEAR"
 
     def _convert_value_to_gauge_ratio(self, sensor_value: float, gauge_range: SensorGaugeRange) -> float:
         value_range = gauge_range.maximum_value - gauge_range.minimum_value
@@ -435,6 +555,32 @@ class EnvironmentalDataDisplaySystem:
         filled_width = int(bar_width * fill_ratio)
         for line_x in range(start_x, start_x + filled_width, 2):
             drawing_context.line([(line_x, start_y), (line_x, start_y + bar_height)], fill=0, width=1)
+
+    def _fit_text(self, drawing_context: ImageDraw, font: ImageFont, text: str, max_width: int) -> str:
+        try:
+            bbox = drawing_context.textbbox((0, 0), text, font=font)
+            width = bbox[2] - bbox[0]
+        except AttributeError:
+            width, _ = drawing_context.textsize(text, font=font)
+        if width <= max_width:
+            return text
+        ellipsis = "…"
+        try:
+            bbox = drawing_context.textbbox((0, 0), ellipsis, font=font)
+            ell_w = bbox[2] - bbox[0]
+        except AttributeError:
+            ell_w, _ = drawing_context.textsize(ellipsis, font=font)
+        trimmed = text
+        while trimmed and True:
+            trimmed = trimmed[:-1]
+            try:
+                bbox = drawing_context.textbbox((0, 0), trimmed + ellipsis, font=font)
+                w = bbox[2] - bbox[0]
+            except AttributeError:
+                w, _ = drawing_context.textsize(trimmed + ellipsis, font=font)
+            if w <= max_width:
+                return trimmed + ellipsis
+        return ellipsis
 
     def _create_display_image_for_epaper(self, epaper_device, display_font: ImageFont) -> Image:
         is_dump1090_ok = check_systemd_service_status(DUMP1090_SERVICE_NAME)
@@ -474,26 +620,33 @@ class EnvironmentalDataDisplaySystem:
             self.is_initial_startup = False
         else:
             layout = DisplayLayoutManager(*image_size)
+            max_text_width = image_size[0] - layout.text_area_start_x - 6
             for i, (key, label, path, last_changed_ts_path, unit, fmt) in enumerate(self.display_item_definitions):
                 y_pos = i * layout.single_section_height
                 gauge_y = y_pos + (layout.single_section_height - layout.gauge_bar_height) // 2
                 if key == "THI_CO2":
-                    text = self._get_combined_thi_and_co2_data(label)
+                    raw = self._get_combined_thi_and_co2_data(label)
+                    text = self._fit_text(drawing_context, display_font, raw, max_text_width)
                     drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
-                elif key == "PiQZSS":
-                    text, _ = self._get_combined_pi_and_qzss_text(label)
+                elif key == "PiADS":
+                    raw = self._get_combined_pi_and_ads_text(label)
+                    text = self._fit_text(drawing_context, display_font, raw, max_text_width)
                     drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
-                elif key == "BLANK":
-                    pass
+                elif key == "RAIN":
+                    raw = self._get_rain_status_text()
+                    text = self._fit_text(drawing_context, display_font, raw, max_text_width)
+                    drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
                 else:
                     value = self._extract_sensor_value_from_data(path)
                     last_changed_ts = self._extract_sensor_value_from_data(last_changed_ts_path)
                     is_stale_by_no_change = (last_changed_ts is not None and time.time() - last_changed_ts > NO_CHANGE_ERROR_THRESHOLD_SECONDS)
                     if value is None or is_stale_by_no_change:
-                        text = f"{label}ERROR"
+                        raw = f"{label}ERROR"
+                        text = self._fit_text(drawing_context, display_font, raw, max_text_width)
                         drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
                     else:
-                        text = f"{label}{fmt.format(value)}{unit}"
+                        raw = f"{label}{fmt.format(value)}{unit}"
+                        text = self._fit_text(drawing_context, display_font, raw, max_text_width)
                         drawing_context.text((layout.text_area_start_x, gauge_y), text, font=display_font, fill=0)
                         if key in self.sensor_gauge_ranges:
                             self._draw_gauge_bar_with_vertical_lines(
@@ -556,4 +709,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
