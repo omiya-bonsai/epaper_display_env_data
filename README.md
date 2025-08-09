@@ -3,10 +3,7 @@
 このプロジェクトは、Raspberry Pi に接続した e-Paper（電子ペーパー）に、MQTT 経由で受信した **環境データ**・**システム状態**・**レインセンサー情報** を定期的に表示するアプリケーションです。
 低消費電力・常時視認・再起動復元に対応し、ヘッドレス運用のサーバーや屋外観測に最適です。
 
-![IMG_7574](https://github.com/user-attachments/assets/8ee56f4c-62db-4ffe-b9f1-f1b768ee10b5)
-
-![IMG_7574](https://github.com/user-attachments/assets/00e9bb4c-30bc-4aee-840c-28336e6b6ca7)
-
+<img width="642" height="642" alt="b" src="https://github.com/user-attachments/assets/2f6fd7ae-9be0-4672-86d8-9b4b31e0d997" />
 
 ---
 
