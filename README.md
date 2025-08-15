@@ -1,55 +1,57 @@
-# e-Paper 環境・システム・気象監視ディスプレイ 🌦️🛰️
+[English](README.md) | [日本語](README_ja.md)
 
-このプロジェクトは、Raspberry Pi に接続した e-Paper（電子ペーパー）に、MQTT 経由で受信した **環境データ**・**システム状態**・**レインセンサー情報** を定期的に表示するアプリケーションです。
-低消費電力・常時視認・再起動復元に対応し、ヘッドレス運用のサーバーや屋外観測に最適です。
+# e-Paper Environmental, System & Weather Monitoring Display 🌦️🛰️
+
+This project is software that displays **environmental data**, **system status**, and **rain sensor information** received via MQTT on an e-Paper (electronic paper) connected to a Raspberry Pi.
+It supports low power consumption, constant visibility, and restart recovery, making it ideal for headless server operation and outdoor monitoring.
 
 <img width="642" height="642" alt="b" src="https://github.com/user-attachments/assets/2f6fd7ae-9be0-4672-86d8-9b4b31e0d997" />
 
 ---
 
-## 📦 使用ハードウェア
+## 📦 Hardware Used
 
-- **レインセンサー**：[雨量センサモジュール（スイッチサイエンス販売品）](https://www.switch-science.com/products/8202)
-- **e-Paper ディスプレイ**：[Waveshare製 2.13inch e-Paper HAT (V4)（スイッチサイエンス販売品）](https://www.switch-science.com/products/9848)
-
----
-
-## ✨ 主な機能
-
-- **環境データの可視化**
-  温度・湿度・CO₂濃度・不快指数（THI）を見やすく表示（CO₂は THI と同じ行に併記）
-- **気象監視（レインセンサー統合）**
-  雨/降り出し予兆/ケーブル異常/オフライン/エラー/再起動などを 1 行で簡潔に表示
-- **システム監視**
-  Pi5 と ADS-B(Automatic Dependent Surveillance–Broadcast) 側の **CPU温度のみ** を表示（使用率等は表示しない）
-- **異常時アラート**
-  指定した systemd サービス停止時、全画面の警告表示に切り替え
-- **データ永続化**
-  最新値を JSON に保存し、再起動後も直前の状態を復元
-- **柔軟な設定**
-  `.env` で MQTT 接続先・トピック・表示間隔・フォントを変更可能
+- **Rain Sensor**: [Rain Sensor Module (sold by Switch Science)](https://www.switch-science.com/products/8202)
+- **e-Paper Display**: [Waveshare 2.13inch e-Paper HAT (V4) (sold by Switch Science)](https://www.switch-science.com/products/9848)
 
 ---
 
-## 🛠️ セットアップ
+## ✨ Main Features
 
-💡 **レインセンサーの設置・配線・設定方法**については、以下のリポジトリを参考にしてください。  
+- **Environmental Data Visualization**
+  Clear display of temperature, humidity, CO₂ concentration, and discomfort index (THI) (CO₂ is displayed alongside THI on the same line)
+- **Weather Monitoring (Rain Sensor Integration)**
+  Concise display of rain/rain onset signs/cable abnormalities/offline/errors/restart status in one line
+- **System Monitoring**
+  Displays **CPU temperature only** for Pi5 and ADS-B (Automatic Dependent Surveillance–Broadcast) sides (does not display usage rates, etc.)
+- **Abnormal Alerts**
+  Switches to full-screen warning display when specified systemd services stop
+- **Data Persistence**
+  Saves latest values to JSON and restores previous state after restart
+- **Flexible Configuration**
+  Change MQTT connection destination, topics, display intervals, and fonts via `.env`
+
+---
+
+## 🛠️ Setup
+
+💡 **For rain sensor installation, wiring, and configuration methods**, please refer to the following repository:  
 [https://github.com/omiya-bonsai/atomS3-capacitive-rain-sensor](https://github.com/omiya-bonsai/atomS3-capacitive-rain-sensor)
 
-### 必要条件
+### Requirements
 
-**ハードウェア**
-- Raspberry Pi（Zero 2 W〜5 推奨）
-- e-Paper ディスプレイ（例: Waveshare 2.13inch）
-- （任意）レインセンサー
+**Hardware**
+- Raspberry Pi (Zero 2 W to 5 recommended)
+- e-Paper display (e.g., Waveshare 2.13inch)
+- (Optional) Rain sensor
 
-**ソフトウェア**
+**Software**
 - Python 3
 - Git
 
 ---
 
-### インストール
+### Installation
 
 ```bash
 git clone https://github.com/omiya-bonsai/epaper_display_env_data.git
@@ -57,22 +59,22 @@ cd epaper_display_env_data
 python3 -m venv eink
 source eink/bin/activate
 pip install -r requirements.txt
-````
+```
 
 ---
 
-## `requirements.txt` の例
+## `requirements.txt` Example
 
 ```txt
 paho-mqtt
 pillow
 python-dotenv
-# e-Paper のモデルに応じたドライバ（例: waveshare-epd）
+# e-Paper model-specific driver (e.g., waveshare-epd)
 ```
 
 ---
 
-## `.env` 設定例
+## `.env` Configuration Example
 
 ```dotenv
 # --- MQTT Broker ---
@@ -111,9 +113,9 @@ DEW_THRESHOLD_PERCENT=2.0
 
 ---
 
-## 🚀 実行方法（systemd サービス化）
+## 🚀 Execution Method (systemd Service)
 
-サービスファイル例：
+Service file example:
 
 ```ini
 [Unit]
@@ -131,13 +133,13 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-起動と自動起動設定：
+Startup and automatic startup configuration:
 
 ```bash
 sudo systemctl enable --now epaper_disp.service
 ```
 
-運用時の便利コマンド：
+Useful commands for operation:
 
 ```bash
 systemctl status epaper_disp.service
@@ -147,39 +149,39 @@ sudo systemctl restart epaper_disp.service
 
 ---
 
-## 📡 表示仕様（5 行構成・CPUは温度のみ）
+## 📡 Display Specifications (5-line configuration, CPU temperature only)
 
-|  行 | 表示内容                                    | 備考                                           |
-| -: | --------------------------------------- | -------------------------------------------- |
-|  1 | **Temp:** `xx.x°C`                      | 気温（ゲージ表示あり）                                  |
-|  2 | **Hum:** `yy.y%`                        | 湿度（ゲージ表示あり）                                  |
-|  3 | **Pi5:** `aa.a℃` **/** **ADS:** `bb.b℃` | CPU温度のみ（スラッシュ区切り）                            |
-|  4 | **RAIN 行**                              | 雨/予兆/異常/オフライン/エラー/再起動など集約                    |
-|  5 | **THI:** `t.t` **/** **CO2:** `ccccppm` | 欠損時は `ERROR` 併記（例: `THI:ERROR / CO2:800ppm`） |
-
----
-
-## 🌧️ RAIN 行ステータス例
-
-| 表記例            | 意味                 |
-| -------------- | ------------------ |
-| `RAIN`         | 雨を検知（H/M/L付与の場合あり） |
-| `RAIN→`        | 降り出し予兆             |
-| `OFFLINE MISS` | データ受信なし            |
-| `CAB`          | ケーブル異常             |
-| `ERR`          | エラー発生              |
-| `RST`          | 再起動検知              |
-| `Δ:x.x%`       | 変化率（表示余裕時）         |
-| `ALL CLEAR`    | 問題なし               |
+| Line | Display Content                         | Notes                                          |
+| ---: | --------------------------------------- | ---------------------------------------------- |
+|    1 | **Temp:** `xx.x°C`                     | Temperature (with gauge display)               |
+|    2 | **Hum:** `yy.y%`                       | Humidity (with gauge display)                  |
+|    3 | **Pi5:** `aa.a℃` **/** **ADS:** `bb.b℃` | CPU temperature only (slash separated)        |
+|    4 | **RAIN Line**                           | Consolidated rain/signs/abnormal/offline/error/restart status |
+|    5 | **THI:** `t.t` **/** **CO2:** `ccccppm` | When missing, displays `ERROR` (e.g., `THI:ERROR / CO2:800ppm`) |
 
 ---
 
-## 🙏 謝辞
+## 🌧️ RAIN Line Status Examples
 
-本プロジェクトは ChatGPT（GPT-5）との対話を通じて以下の改善を実現しました。
+| Display Example | Meaning                    |
+| --------------- | -------------------------- |
+| `RAIN`          | Rain detected (may include H/M/L) |
+| `RAIN→`         | Rain onset signs           |
+| `OFFLINE MISS`  | No data received           |
+| `CAB`           | Cable abnormality          |
+| `ERR`           | Error occurred             |
+| `RST`           | Restart detected           |
+| `Δ:x.x%`        | Change rate (when display allows) |
+| `ALL CLEAR`     | No problems                |
 
-* レインセンサー監視ロジック統合
-* RAIN 行の表記ルール整備
-* Pi5/ADS CPU温度表示機能の特化
-* e-Paper 表示文字数の最適化
-* README.md の整理と最新仕様反映
+---
+
+## 🙏 Acknowledgments
+
+This project achieved the following improvements through dialogue with ChatGPT (GPT-5):
+
+* Rain sensor monitoring logic integration
+* RAIN line notation rule organization  
+* Specialization of Pi5/ADS CPU temperature display functionality
+* Optimization of e-Paper display character count
+* README.md organization and latest specification reflection
