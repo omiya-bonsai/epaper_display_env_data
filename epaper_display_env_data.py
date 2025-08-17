@@ -1,136 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-# =============================================================================
-# e-Paper Environment / System / Weather Monitor  ― 概要と使い方（初学者向け）
-# =============================================================================
-# このスクリプトは、Raspberry Pi + e-Paper（電子ペーパー）で
-#  1) 環境センサー（温度/湿度/CO2/THI）
-#  2) システム情報（Pi5/ADS の CPU温度）
-#  3) レインセンサー（雨・結露・ノイズ・ケーブル異常・オフライン）
-# を MQTT 経由で受信し、5行レイアウトで見やすく表示します。
-#
-# - 低消費電力：e-Paper は更新時以外ほぼ消費ゼロ。常時監視に好適。
-# - 復元可能：最新データを JSON 保存 → 再起動後も前回状態を復元。
-# - 監視強化：指定の systemd サービス停止時は全画面アラートを表示。
-# - 初心者配慮：.env で接続先や表示設定を変更でき、コード改変を最小化。
-#
-# -----------------------------------------------------------------------------
-# ■ 何が表示されるか（5 行）
-#   1行目: Temp: xx.x°C  /  Hum: yy.y%
-#   2行目: CO2: nnnn ppm（THIとセットで5行目にまとめる構成も可）
-#   3行目: Pi5: aa.a℃ / ADS: bb.b℃          ← スラッシュ区切りで視認性UP
-#   4行目: RAIN 行（雨/予兆/オフライン/ケーブル/ノイズ等を1行に集約）
-#   5行目: THI: t.t / CO2: ccccppm           ← 片方エラー時は ERROR を表示
-#
-#   ※ 行幅オーバーを防ぐため、文字列は自動で「…」にトリミングします。
-#   ※ 湿度は1行目に出すため、RAIN 行では重複表示しません。
-#
-# -----------------------------------------------------------------------------
-# ■ レインセンサーの表示ルール（例）
-#   - 雨検知          : "RAIN"（変化率に応じて H/M/L 強度を付与：RAIN H など）
-#   - 降り出し予兆    : "RAIN→"（baseline 比 Δ% がしきい値以上）
-#   - 結露/ノイズ等   : "DEW" / "NOISE"（※DEW は将来拡張時の例、現実装は Δ%/警告系）
-#   - ケーブル異常    : "CAB"
-#   - オフライン      : "OFFLINE MISS"（一定秒数受信なし）
-#   - 再起動検出      : "RST"（uptime が後退）
-#   - 追加情報        : "Δ:x.x%"（baseline 比の変化率、幅が許せば併記）
-#   - 正常時          : "ALL CLEAR"
-#
-#   例:  "RAIN M Δ:5.2%" / "OFFLINE MISS" / "RAIN→ Δ:3.1%" / "CAB ERR"
-#
-# -----------------------------------------------------------------------------
-# ■ データはどう届くか（MQTT）
-#   - ブローカー： .env の MQTT_BROKER_IP_ADDRESS / PORT を使用
-#   - トピック  ： 各種センサー/デバイスから publish（例は .env に記述）
-#   - 本スクリプト：接続 → subscribe → 受信 → 解析 → 変数更新 → JSON 保存
-#   - 受信直後の時刻（last_received）や「最後に値が変わった時刻」（last_changed）も記録
-#     → 長時間値が変わらない（固着？）も ERROR として表示可能
-#
-# -----------------------------------------------------------------------------
-# ■ JSON 保存（再起動に強い）
-#   - data/ 以下（BASE_DIRECTORY）に各 JSON を保存（温湿/CO2/THI/CPU/RAIN）
-#   - 起動時にロードして「直前の表示」を復元（ネットが未接続でも空白にならない）
-#
-# -----------------------------------------------------------------------------
-# ■ しきい値（.env で上書き可）
-#   - DATA_STALENESS_THRESHOLD_SECONDS   : 受信が古いと ERROR 扱い
-#   - NO_CHANGE_ERROR_THRESHOLD_SECONDS  : 値が長時間変わらないと ERROR
-#   - RAIN_ONLINE_THRESHOLD_SECONDS      : RAIN のオフライン判定（受信途絶）
-#   - PRERAIN_THRESHOLD_PERCENT          : 予兆（RAIN→）にする変化率しきい値
-#   - DEW_THRESHOLD_PERCENT              : （将来）結露判定に利用する想定
-#
-# -----------------------------------------------------------------------------
-# ■ systemd サービス監視
-#   - .env の DUMP1090_SERVICE_NAME を is-active で監視
-#   - 停止時は通常画面をやめ、全画面アラート（"!! ALERT !! … SERVICE DOWN"）
-#   - Linux 以外や systemctl 不在環境ではエラーログを出しつつ False とする
-#
-# -----------------------------------------------------------------------------
-# ■ レイアウトと描画
-#   - Pillow（PIL）で真っ白キャンバスを生成 → テキスト＆区切り線を描画
-#   - 温度/湿度/CPU 温度などはゲージ（横棒）も描画（視覚的に一目）
-#   - 文字数オーバー時は _fit_text() で末尾に "…" を付けて丸める
-#   - e-Paper の実機が無い環境ではテストモード（画像を作るだけ）
-#
-# -----------------------------------------------------------------------------
-# ■ 初回起動の表示
-#   - 過去 JSON が無いなどで復元できないときは、
-#     1回だけ "Please wait until HH:MM" を全画面に表示してから通常運転へ
-#
-# -----------------------------------------------------------------------------
-# ■ 代表的な依存ライブラリ
-#   - paho-mqtt     : MQTT クライアント
-#   - Pillow        : 画像生成・テキスト描画
-#   - python-dotenv : .env 読み込み
-#   - （e-Paper ドライバ）: waveshare-epd など、機種に合わせてインストール
-#
-# -----------------------------------------------------------------------------
-# ■ 運用のコツ
-#   - .env でブローカーやトピック、表示間隔、フォントを調整
-#   - 行幅を超えない短いラベルに（例: "RPi5" → "Pi5"）
-#   - RAIN 行に湿度は出さない（上段と重複するため）
-#   - しきい値は環境に合わせて微調整（誤検知/見逃しの最小化）
-#
-# -----------------------------------------------------------------------------
-# ■ よくあるトラブルと対処
-#   - 何も表示されない：MQTT 接続先やトピック、.env のパスを再確認
-#   - RAIN が常に OFFLINE：RAIN_ONLINE_THRESHOLD_SECONDS を確認 / センサー送信間隔
-#   - 文字がはみ出す     ：ラベルを短く、値の区切りは "/" で、_fit_text の動作確認
-#   - サービス監視が効かない：systemctl が使えるか、サービス名が正しいか
-#
-# -----------------------------------------------------------------------------
-# ■ 実行方法（例）
-#   1) 仮想環境を作成し依存をインストール
-#      $ python3 -m venv eink && source eink/bin/activate
-#      (eink) $ pip install -r requirements.txt
-#   2) .env を用意（MQTT/トピック/フォント/保存先 など）
-#   3) python で実行 or systemd で常駐化
-#
-#   systemd サービス例：
-#     [Unit]
-#     Description=E-Paper Display Environment & Weather Monitor
-#     After=network.target
-#
-#     [Service]
-#     Type=simple
-#     User=<your user>
-#     WorkingDirectory=/path/to/project
-#     ExecStart=/path/to/venv/python /path/to/epaper_display_env_data.py
-#     Restart=always
-#
-#     [Install]
-#     WantedBy=multi-user.target
-#
-# -----------------------------------------------------------------------------
-# ■ 拡張アイデア
-#   - RAIN 初期化中の表記（"RAIN: INIT…"）を、次回更新時刻までの暫定表示に
-#   - DEW（結露）専用ロジックの導入・湿球/露点計算の追加
-#   - Pi5 側の CPU/MEM/ディスク等の指標を増やして "/" 区切りで表示
-#   - 屋外センサーのキャリブレーション・ノイズ除去フィルタの適用
-#
-# =============================================================================
-
 # =============================================================================
 # e-Paper Environment / System / Weather Monitor
 # -----------------------------------------------------------------------------
@@ -187,7 +54,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # 動作パラメータ（.env で上書き可能）
 # - STALENESS: しばらく更新が無い/変化が無いデータをエラー表記にするためのしきい値
-# - RAIN_*   : レインセンサーのオンライン判定・降り出し予兆などのしきい値
+# - RAIN_* : レインセンサーのオンライン判定・降り出し予兆などのしきい値
 # -----------------------------------------------------------------------------
 DATA_STALENESS_THRESHOLD_SECONDS = int(os.getenv('DATA_STALENESS_THRESHOLD_SECONDS', 5400))
 NO_CHANGE_ERROR_THRESHOLD_SECONDS = 3600
@@ -337,19 +204,20 @@ def handle_mqtt_message_received(client, userdata, message):
             if message.topic == MQTT_TOPIC_QZSS_CPU_TEMP:
                 payload_dict = json.loads(payload_str)
                 new_temp = payload_dict.get("temperature")
-                if new_temp is not None and new_temp != current_mqtt_qzss_cpu_temperature:
-                    mqtt_qzss_cpu_last_changed_timestamp = received_timestamp
-                current_mqtt_qzss_cpu_temperature = new_temp
-                mqtt_qzss_cpu_last_received_timestamp = received_timestamp
-                save_data_to_json_file(
-                    QZSS_TEMPERATURE_FILE_PATH,
-                    {
-                        "temperature": current_mqtt_qzss_cpu_temperature,
-                        "timestamp": received_timestamp,
-                        "last_changed_timestamp": mqtt_qzss_cpu_last_changed_timestamp
-                    }
-                )
-                logger.info(f"MQTT ADS CPU temperature received: {current_mqtt_qzss_cpu_temperature}°C")
+                if new_temp is not None:
+                    if new_temp != current_mqtt_qzss_cpu_temperature:
+                        mqtt_qzss_cpu_last_changed_timestamp = received_timestamp
+                    current_mqtt_qzss_cpu_temperature = new_temp
+                    mqtt_qzss_cpu_last_received_timestamp = received_timestamp
+                    save_data_to_json_file(
+                        QZSS_TEMPERATURE_FILE_PATH,
+                        {
+                            "temperature": current_mqtt_qzss_cpu_temperature,
+                            "timestamp": received_timestamp,
+                            "last_changed_timestamp": mqtt_qzss_cpu_last_changed_timestamp
+                        }
+                    )
+                    logger.info(f"MQTT ADS CPU temperature received: {current_mqtt_qzss_cpu_temperature}°C")
 
             # --- Pi 側 CPU 温度（vcgencmd の出力 "temp=xx.x" をパース） ---
             elif message.topic == MQTT_TOPIC_PI_CPU_TEMP:
@@ -376,34 +244,36 @@ def handle_mqtt_message_received(client, userdata, message):
 
                 # 温度
                 new_temp = payload_dict.get("temperature")
-                if new_temp is not None and new_temp != current_environment_temperature:
-                    environment_temperature_last_changed_timestamp = received_timestamp
-                current_environment_temperature = new_temp
-                environment_temperature_last_received_timestamp = received_timestamp
-                save_data_to_json_file(
-                    ENVIRONMENT_TEMPERATURE_FILE_PATH,
-                    {
-                        "temperature": current_environment_temperature,
-                        "timestamp": received_timestamp,
-                        "last_changed_timestamp": environment_temperature_last_changed_timestamp
-                    }
-                )
+                if new_temp is not None:
+                    if new_temp != current_environment_temperature:
+                        environment_temperature_last_changed_timestamp = received_timestamp
+                    current_environment_temperature = new_temp
+                    environment_temperature_last_received_timestamp = received_timestamp
+                    save_data_to_json_file(
+                        ENVIRONMENT_TEMPERATURE_FILE_PATH,
+                        {
+                            "temperature": current_environment_temperature,
+                            "timestamp": received_timestamp,
+                            "last_changed_timestamp": environment_temperature_last_changed_timestamp
+                        }
+                    )
 
                 # 湿度
                 new_humidity = payload_dict.get("humidity")
-                if new_humidity is not None and new_humidity != current_environment_humidity:
-                    environment_humidity_last_changed_timestamp = received_timestamp
-                current_environment_humidity = new_humidity
-                environment_humidity_last_received_timestamp = received_timestamp
-                save_data_to_json_file(
-                    ENVIRONMENT_HUMIDITY_FILE_PATH,
-                    {
-                        "humidity": current_environment_humidity,
-                        "timestamp": environment_humidity_last_received_timestamp,
-                        "last_changed_timestamp": environment_humidity_last_changed_timestamp
-                    }
-                )
-
+                if new_humidity is not None:
+                    if new_humidity != current_environment_humidity:
+                        environment_humidity_last_changed_timestamp = received_timestamp
+                    current_environment_humidity = new_humidity
+                    environment_humidity_last_received_timestamp = received_timestamp
+                    save_data_to_json_file(
+                        ENVIRONMENT_HUMIDITY_FILE_PATH,
+                        {
+                            "humidity": current_environment_humidity,
+                            "timestamp": environment_humidity_last_received_timestamp,
+                            "last_changed_timestamp": environment_humidity_last_changed_timestamp
+                        }
+                    )
+                
                 logger.info(f"MQTT environment data received - Temperature: {current_environment_temperature}°C, Humidity: {current_environment_humidity}%")
 
             # --- CO2 濃度 ---
@@ -411,42 +281,44 @@ def handle_mqtt_message_received(client, userdata, message):
                 payload_dict = json.loads(payload_str)
                 if payload_dict.get("device_id") == "pico_w_production":
                     new_co2 = payload_dict.get("co2")
-                    if new_co2 is not None and new_co2 != current_co2_concentration:
-                        co2_concentration_last_changed_timestamp = received_timestamp
-                    current_co2_concentration = new_co2
-                    co2_data_last_received_timestamp = received_timestamp
-                    co2_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(
-                        CO2_DATA_FILE_PATH,
-                        {
-                            "co2": current_co2_concentration,
-                            "timestamp": co2_data_source_timestamp,
-                            "last_update": co2_data_last_received_timestamp,
-                            "last_changed_timestamp": co2_concentration_last_changed_timestamp
-                        }
-                    )
-                    logger.info(f"MQTT CO2 concentration received: {current_co2_concentration} ppm")
+                    if new_co2 is not None:
+                        if new_co2 != current_co2_concentration:
+                            co2_concentration_last_changed_timestamp = received_timestamp
+                        current_co2_concentration = new_co2
+                        co2_data_last_received_timestamp = received_timestamp
+                        co2_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
+                        save_data_to_json_file(
+                            CO2_DATA_FILE_PATH,
+                            {
+                                "co2": current_co2_concentration,
+                                "timestamp": co2_data_source_timestamp,
+                                "last_update": co2_data_last_received_timestamp,
+                                "last_changed_timestamp": co2_concentration_last_changed_timestamp
+                            }
+                        )
+                        logger.info(f"MQTT CO2 concentration received: {current_co2_concentration} ppm")
 
             # --- THI（不快指数） ---
             elif message.topic == MQTT_TOPIC_SENSOR_DATA:
                 payload_dict = json.loads(payload_str)
                 if payload_dict.get("device_id") == "pico_w_production":
                     new_thi = payload_dict.get("thi")
-                    if new_thi is not None and new_thi != current_thi_value:
-                        thi_value_last_changed_timestamp = received_timestamp
-                    current_thi_value = new_thi
-                    thi_data_last_received_timestamp = received_timestamp
-                    thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
-                    save_data_to_json_file(
-                        THI_DATA_FILE_PATH,
-                        {
-                            "thi": current_thi_value,
-                            "timestamp": thi_data_source_timestamp,
-                            "last_update": thi_data_last_received_timestamp,
-                            "last_changed_timestamp": thi_value_last_changed_timestamp
-                        }
-                    )
-                    logger.info(f"MQTT THI data received: {current_thi_value}")
+                    if new_thi is not None:
+                        if new_thi != current_thi_value:
+                            thi_value_last_changed_timestamp = received_timestamp
+                        current_thi_value = new_thi
+                        thi_data_last_received_timestamp = received_timestamp
+                        thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
+                        save_data_to_json_file(
+                            THI_DATA_FILE_PATH,
+                            {
+                                "thi": current_thi_value,
+                                "timestamp": thi_data_source_timestamp,
+                                "last_update": thi_data_last_received_timestamp,
+                                "last_changed_timestamp": thi_value_last_changed_timestamp
+                            }
+                        )
+                        logger.info(f"MQTT THI data received: {current_thi_value}")
 
             # --- レインセンサー ---
             elif message.topic == MQTT_TOPIC_RAIN:
@@ -728,10 +600,10 @@ class EnvironmentalDataDisplaySystem:
         # THI_CO2 は専用の組み合わせ表示関数で生成
         self.display_item_definitions = [
             ("Temperature", "Temp:", "current_environment_temperature", "environment_temperature_last_changed_timestamp", "°C", "{:5.1f}"),
-            ("Humidity",    "Hum:",  "current_environment_humidity",   "environment_humidity_last_changed_timestamp",   "%",  "{:5.1f}"),
-            ("PiADS",       "Pi5:",  "",                               "",                                               "",  ""),
-            ("RAIN",        "",      "",                               "",                                               "",  ""),
-            ("THI_CO2",     "THI:",  "combined_thi_co2",               "",                                               "",  "")
+            ("Humidity",    "Hum:",  "current_environment_humidity",    "environment_humidity_last_changed_timestamp",    "%",  "{:5.1f}"),
+            ("PiADS",       "Pi5:",  "",                                "",                                               "",   ""),
+            ("RAIN",        "",      "",                                "",                                               "",   ""),
+            ("THI_CO2",     "THI:",  "combined_thi_co2",                "",                                               "",   "")
         ]
 
     # グローバル名前空間から値を取り出すためのヘルパ
@@ -1089,4 +961,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
