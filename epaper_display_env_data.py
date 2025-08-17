@@ -90,8 +90,14 @@ CO2_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'co2_data.json')
 THI_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'thi_data.json')
 RAIN_DATA_FILE_PATH = os.path.join(BASE_DIRECTORY, 'rain_data.json')
 
+# -----------------------------------------------------------------------------
+# サービス監視設定
+# -----------------------------------------------------------------------------
 # 監視する systemd サービス名
 DUMP1090_SERVICE_NAME = os.getenv('DUMP1090_SERVICE_NAME', 'dump1090-fa.service')
+# サービス監視を有効にするか (True/False)
+ENABLE_SERVICE_MONITORING = os.getenv('ENABLE_SERVICE_MONITORING', 'True').lower() == 'true'
+
 
 # -----------------------------------------------------------------------------
 # 受信データを保持するグローバル変数
@@ -273,7 +279,7 @@ def handle_mqtt_message_received(client, userdata, message):
                             "last_changed_timestamp": environment_humidity_last_changed_timestamp
                         }
                     )
-                
+
                 logger.info(f"MQTT environment data received - Temperature: {current_environment_temperature}°C, Humidity: {current_environment_humidity}%")
 
             # --- CO2 濃度 ---
@@ -791,33 +797,33 @@ class EnvironmentalDataDisplaySystem:
     # e-Paper に表示する画像を作る（Pillow でキャンバス作成 → テキストや線を描画）
     # -----------------------------------------------------------------------------
     def _create_display_image_for_epaper(self, epaper_device, display_font: ImageFont) -> Image:
-        # 監視サービスが落ちていたら「警告画面」に差し替え
-        is_dump1090_ok = check_systemd_service_status(DUMP1090_SERVICE_NAME)
-
         # epaper デバイスが無いとき（テストモード）は固定サイズ
         image_size = (250, 122) if epaper_device is None else (epaper_device.height, epaper_device.width)
 
-        # アラート画面の描画（大きな文字で分かりやすく）
-        if not is_dump1090_ok:
-            alert_image = Image.new('1', image_size, 255)
-            draw_alert = ImageDraw.Draw(alert_image)
-            try:
-                alert_font_big = ImageFont.truetype(self.system_config.display_font_file_path, 24)
-                alert_font_small = ImageFont.truetype(self.system_config.display_font_file_path, 16)
-            except OSError:
-                alert_font_big = ImageFont.load_default()
-                alert_font_small = ImageFont.load_default()
+        # --- サービス監視が有効な場合のみ、アラート表示を試みる ---
+        if ENABLE_SERVICE_MONITORING:
+            is_dump1090_ok = check_systemd_service_status(DUMP1090_SERVICE_NAME)
+            if not is_dump1090_ok:
+                # アラート画面の描画（大きな文字で分かりやすく）
+                alert_image = Image.new('1', image_size, 255)
+                draw_alert = ImageDraw.Draw(alert_image)
+                try:
+                    alert_font_big = ImageFont.truetype(self.system_config.display_font_file_path, 24)
+                    alert_font_small = ImageFont.truetype(self.system_config.display_font_file_path, 16)
+                except OSError:
+                    alert_font_big = ImageFont.load_default()
+                    alert_font_small = ImageFont.load_default()
 
-            msg1 = "!! ALERT !!"
-            msg2 = f"{DUMP1090_SERVICE_NAME}"
-            msg3 = "SERVICE DOWN"
-            draw_alert.text((image_size[0] / 2, 20), msg1, font=alert_font_big, fill=0, anchor="ms")
-            draw_alert.text((image_size[0] / 2, 60), msg2, font=alert_font_small, fill=0, anchor="ms")
-            draw_alert.text((image_size[0] / 2, 85), msg3, font=alert_font_small, fill=0, anchor="ms")
-            # e-Paper の向きに合わせて90度回転
-            return alert_image.rotate(90, expand=True)
+                msg1 = "!! ALERT !!"
+                msg2 = f"{DUMP1090_SERVICE_NAME}"
+                msg3 = "SERVICE DOWN"
+                draw_alert.text((image_size[0] / 2, 20), msg1, font=alert_font_big, fill=0, anchor="ms")
+                draw_alert.text((image_size[0] / 2, 60), msg2, font=alert_font_small, fill=0, anchor="ms")
+                draw_alert.text((image_size[0] / 2, 85), msg3, font=alert_font_small, fill=0, anchor="ms")
+                # e-Paper の向きに合わせて90度回転
+                return alert_image.rotate(90, expand=True)
 
-        # 通常表示キャンバス
+        # --- 通常表示 (サービス監視が無効 or サービスが正常) ---
         display_image = Image.new('1', image_size, 255)
         drawing_context = ImageDraw.Draw(display_image)
 
