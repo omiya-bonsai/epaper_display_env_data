@@ -660,7 +660,8 @@ class EnvironmentalDataDisplaySystem:
                 ads_text = f"{current_mqtt_qzss_cpu_temperature:.1f}℃"
 
             # 「Pi5:xx.x℃ / ADS:yy.y℃」の形式で返す
-            return f"{display_label}{pi_text} / ADS:{ads_text}"
+            # return f"{display_label}{pi_text} / ADS:{ads_text}"
+            return f"{display_label}{pi_text} / Pi2W:{ads_text}"
 
     # レインセンサー行のテキストを生成
     # ルール（簡略）:
