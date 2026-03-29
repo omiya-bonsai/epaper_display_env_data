@@ -304,7 +304,7 @@ def handle_mqtt_message_received(client, userdata, message):
                     new_thi = payload_dict.get("thi")
                     if new_thi is not None:
                         if new_thi != current_thi_value:
-                            thi_value_last_changed_timestamp[118;1:3u = received_timestamp
+                            thi_value_last_changed_timestamp = received_timestamp
                         current_thi_value = new_thi
                         thi_data_last_received_timestamp = received_timestamp
                         thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
