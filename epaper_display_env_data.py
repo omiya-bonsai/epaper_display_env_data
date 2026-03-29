@@ -13,6 +13,7 @@
 # - e-Paper が無い環境でも動くように、テストモードを用意しています（epaper import 失敗時）。
 # - 表示は 5 行構成（Temp / Hum / Pi5+ADS / Rain / THI+CO2）で、横幅を超えないようにトリミングします。
 # - 監視対象 systemd サービス（dump1090 等）が落ちたときは、全面アラート表示に切り替えます。
+# - partial refresh を利用し、初回/定期的に full refresh、それ以外は partial refresh を使います。
 # =============================================================================
 
 from dataclasses import dataclass
@@ -239,7 +240,6 @@ def handle_mqtt_message_received(client, userdata, message):
             elif message.topic == MQTT_TOPIC_ENV4:
                 payload_dict = json.loads(payload_str)
 
-                # 温度
                 new_temp = payload_dict.get("temperature")
                 if new_temp is not None:
                     if new_temp != current_environment_temperature:
@@ -255,7 +255,6 @@ def handle_mqtt_message_received(client, userdata, message):
                         }
                     )
 
-                # 湿度
                 new_humidity = payload_dict.get("humidity")
                 if new_humidity is not None:
                     if new_humidity != current_environment_humidity:
@@ -305,7 +304,7 @@ def handle_mqtt_message_received(client, userdata, message):
                     new_thi = payload_dict.get("thi")
                     if new_thi is not None:
                         if new_thi != current_thi_value:
-                            thi_value_last_changed_timestamp = received_timestamp
+                            thi_value_last_changed_timestamp[118;1:3u = received_timestamp
                         current_thi_value = new_thi
                         thi_data_last_received_timestamp = received_timestamp
                         thi_data_source_timestamp = payload_dict.get("timestamp", received_timestamp)
@@ -324,10 +323,8 @@ def handle_mqtt_message_received(client, userdata, message):
             elif message.topic == MQTT_TOPIC_RAIN:
                 payload = json.loads(payload_str)
 
-                # 再起動検出のために「前回 uptime」を保持
                 rain_prev_uptime = rain_uptime
 
-                # 値を安全に取り出し（None なら代入しない）
                 rain_id = payload.get("id")
                 rain_baseline = float(payload.get("baseline")) if payload.get("baseline") is not None else None
                 rain_current = float(payload.get("current")) if payload.get("current") is not None else None
@@ -339,10 +336,8 @@ def handle_mqtt_message_received(client, userdata, message):
                 rain_errors = int(payload.get("errors")) if payload.get("errors") is not None else None
                 rain_source_timestamp = float(payload.get("timestamp")) if payload.get("timestamp") is not None else None
 
-                # 受信タイムスタンプ
                 rain_last_received_timestamp = received_timestamp
 
-                # JSON に保存（再起動しても直近表示ができるように）
                 save_data_to_json_file(
                     RAIN_DATA_FILE_PATH,
                     {
@@ -396,7 +391,6 @@ def initialize_mqtt_client_connection():
 # -----------------------------------------------------------------------------
 def save_data_to_json_file(file_path: str, data_dict: dict):
     try:
-        # 保存先ディレクトリが無ければ作る
         dir_path = os.path.dirname(file_path) or "."
         os.makedirs(dir_path, exist_ok=True)
 
@@ -531,7 +525,6 @@ def load_saved_all_mqtt_data():
     except Exception as e:
         logger.error(f"RAIN data restoration error: {e}")
 
-    # True を返すと「初期起動（何もロードできなかった）」として “Please wait” を一度だけ表示
     return not data_was_loaded
 
 # -----------------------------------------------------------------------------
@@ -540,9 +533,16 @@ def load_saved_all_mqtt_data():
 @dataclass
 class SystemConfiguration:
     epaper_display_type: str = os.getenv('EPAPER_DISPLAY_TYPE', 'epd2in13_V4')
-    display_font_file_path: str = os.getenv('DISPLAY_FONT_FILE_PATH', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf')
+    display_font_file_path: str = os.getenv(
+        'DISPLAY_FONT_FILE_PATH',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+    )
     display_font_size_pixels: int = int(os.getenv('DISPLAY_FONT_SIZE_PIXELS', 16))
     display_update_interval_seconds: int = int(os.getenv('DISPLAY_UPDATE_INTERVAL_SECONDS', 300))
+
+    enable_partial_refresh: bool = os.getenv('ENABLE_PARTIAL_REFRESH', 'True').lower() == 'true'
+    partial_refresh_every_n_updates: int = int(os.getenv('PARTIAL_REFRESH_EVERY_N_UPDATES', 10))
+    skip_update_if_image_unchanged: bool = os.getenv('SKIP_UPDATE_IF_IMAGE_UNCHANGED', 'True').lower() == 'true'
 
 # ゲージ（横棒）のレンジ設定
 @dataclass
@@ -568,20 +568,21 @@ class DisplayLayoutManager:
 # -----------------------------------------------------------------------------
 class EnvironmentalDataDisplaySystem:
     def __init__(self):
-        # JSON から前回値を復元
         self.is_initial_startup = load_saved_all_mqtt_data()
 
-        # MQTT 接続
         self.mqtt_communication_client = initialize_mqtt_client_connection()
         if self.mqtt_communication_client is None:
             logger.error("MQTT connection failed. Exiting program.")
             sys.exit(1)
 
-        # 設定
         self.system_config = SystemConfiguration()
 
-        # e-Paper 初期化（無い場合はテストモード）
         self.epaper_device = None
+        self.partial_refresh_supported = False
+        self.partial_refresh_base_initialized = False
+        self.partial_refresh_count = 0
+        self.last_display_buffer = None
+
         if EPAPER_AVAILABLE:
             try:
                 self.epaper_device = epaper.epaper(self.system_config.epaper_display_type).EPD()
@@ -593,14 +594,19 @@ class EnvironmentalDataDisplaySystem:
         else:
             logger.warning("e-Paper display not available (test mode)")
 
-        # ゲージを使う行のレンジ
+        if self.epaper_device is not None:
+            self.partial_refresh_supported = (
+                hasattr(self.epaper_device, 'displayPartBaseImage') and
+                hasattr(self.epaper_device, 'displayPartial')
+            )
+            logger.info(f"Partial refresh supported: {self.partial_refresh_supported}")
+
         self.sensor_gauge_ranges = {
             "Temperature": SensorGaugeRange(-10.0, 50.0, "°C"),
             "Humidity":    SensorGaugeRange(0.0, 100.0, "%"),
             "Pi_CPU":      SensorGaugeRange(30.0, 60.0, "°C")
         }
 
-        # 表示定義（5行）
         self.display_item_definitions = [
             ("Temperature", "Temp:", "current_environment_temperature", "environment_temperature_last_changed_timestamp", "°C", "{:5.1f}"),
             ("Humidity",    "Hum:",  "current_environment_humidity",    "environment_humidity_last_changed_timestamp",    "%",  "{:5.1f}"),
@@ -609,12 +615,10 @@ class EnvironmentalDataDisplaySystem:
             ("THI_CO2",     "THI:",  "combined_thi_co2",                "",                                               "",   "")
         ]
 
-    # グローバル名前空間から値を取り出すヘルパ
     def _extract_sensor_value_from_data(self, data_path: str) -> Optional[float]:
         with data_lock:
             return globals().get(data_path)
 
-    # THI + CO2 を 1 行でまとめる
     def _get_combined_thi_and_co2_data(self, display_label: str) -> str:
         with data_lock:
             is_thi_data_error = False
@@ -651,7 +655,6 @@ class EnvironmentalDataDisplaySystem:
             else:
                 return f"{display_label}{current_thi_value:.1f} / CO2:{current_co2_concentration:.0f}ppm"
 
-    # Pi5 と ADS の CPU 温度を 1 行でまとめる
     def _get_combined_pi_and_ads_text(self, display_label: str) -> str:
         with data_lock:
             pi_stale_by_no_change = (
@@ -672,10 +675,8 @@ class EnvironmentalDataDisplaySystem:
             else:
                 ads_text = f"{current_mqtt_qzss_cpu_temperature:.1f}℃"
 
-            # 表示：Pi5:xx.x℃ / ADS:yy.y℃
             return f"{display_label}{pi_text} / ADS:{ads_text}"
 
-    # レインセンサー行のテキスト
     def _get_rain_status_text(self) -> str:
         with data_lock:
             now = time.time()
@@ -737,7 +738,6 @@ class EnvironmentalDataDisplaySystem:
 
             return "ALL CLEAR"
 
-    # 値→ゲージ充填率（0.0〜1.0）
     def _convert_value_to_gauge_ratio(self, sensor_value: float, gauge_range: SensorGaugeRange) -> float:
         value_range = gauge_range.maximum_value - gauge_range.minimum_value
         if value_range == 0:
@@ -745,14 +745,12 @@ class EnvironmentalDataDisplaySystem:
         normalized_value = (sensor_value - gauge_range.minimum_value) / value_range
         return max(0.0, min(1.0, normalized_value))
 
-    # ゲージ描画（縦線で塗りつぶす）
     def _draw_gauge_bar_with_vertical_lines(self, drawing_context: ImageDraw, start_x: int, start_y: int, bar_width: int, bar_height: int, fill_ratio: float):
         drawing_context.rectangle([start_x, start_y, start_x + bar_width, start_y + bar_height], outline=0)
         filled_width = int(bar_width * fill_ratio)
         for line_x in range(start_x, start_x + filled_width, 2):
             drawing_context.line([(line_x, start_y), (line_x, start_y + bar_height)], fill=0, width=1)
 
-    # 横幅制限に合わせて「…」でトリミング
     def _fit_text(self, drawing_context: ImageDraw, font: ImageFont, text: str, max_width: int) -> str:
         try:
             bbox = drawing_context.textbbox((0, 0), text, font=font)
@@ -776,11 +774,17 @@ class EnvironmentalDataDisplaySystem:
                 return trimmed + ellipsis
         return ellipsis
 
-    # e-Paper に表示する画像を作る
+    def _buffer_changed(self, new_buffer) -> bool:
+        if self.last_display_buffer is None:
+            return True
+        return bytes(new_buffer) != bytes(self.last_display_buffer)
+
+    def _remember_buffer(self, buffer_data):
+        self.last_display_buffer = bytes(buffer_data)
+
     def _create_display_image_for_epaper(self, epaper_device, display_font: ImageFont) -> Image:
         image_size = (250, 122) if epaper_device is None else (epaper_device.height, epaper_device.width)
 
-        # サービス監視（異常なら全面アラート）
         if ENABLE_SERVICE_MONITORING:
             is_dump1090_ok = check_systemd_service_status(DUMP1090_SERVICE_NAME)
             if not is_dump1090_ok:
@@ -801,7 +805,6 @@ class EnvironmentalDataDisplaySystem:
                 draw_alert.text((image_size[0] / 2, 85), msg3, font=alert_font_small, fill=0, anchor="ms")
                 return alert_image.rotate(90, expand=True)
 
-        # 通常表示
         display_image = Image.new('1', image_size, 255)
         drawing_context = ImageDraw.Draw(display_image)
 
@@ -875,29 +878,72 @@ class EnvironmentalDataDisplaySystem:
 
         return display_image.rotate(90, expand=True)
 
-    # 画像を e-Paper に表示
     def update_display_with_current_data(self):
         try:
             try:
-                font = ImageFont.truetype(self.system_config.display_font_file_path, self.system_config.display_font_size_pixels)
+                font = ImageFont.truetype(
+                    self.system_config.display_font_file_path,
+                    self.system_config.display_font_size_pixels
+                )
             except OSError:
                 logger.warning("Specified font not found. Using default font.")
                 font = ImageFont.load_default()
 
             display_image = self._create_display_image_for_epaper(self.epaper_device, font)
 
-            if self.epaper_device is not None:
-                self.epaper_device.init()
-                self.epaper_device.display(self.epaper_device.getbuffer(display_image))
-                self.epaper_device.sleep()
-                logger.info("Display update completed")
-            else:
+            if self.epaper_device is None:
                 logger.info("Test mode: Display update simulated")
+                return
+
+            buffer_data = self.epaper_device.getbuffer(display_image)
+
+            if (
+                self.system_config.skip_update_if_image_unchanged
+                and self._buffer_changed(buffer_data) is False
+            ):
+                logger.info("Display image unchanged. Skipping refresh.")
+                return
+
+            use_partial = (
+                self.system_config.enable_partial_refresh
+                and self.partial_refresh_supported
+                and self.partial_refresh_base_initialized
+                and self.partial_refresh_count < self.system_config.partial_refresh_every_n_updates
+            )
+
+            if use_partial:
+                if hasattr(self.epaper_device, 'init_fast'):
+                    self.epaper_device.init_fast()
+                else:
+                    self.epaper_device.init()
+
+                self.epaper_device.displayPartial(buffer_data)
+                self.partial_refresh_count += 1
+                logger.info(
+                    f"Partial refresh completed "
+                    f"({self.partial_refresh_count}/{self.system_config.partial_refresh_every_n_updates})"
+                )
+
+            else:
+                self.epaper_device.init()
+
+                if self.system_config.enable_partial_refresh and self.partial_refresh_supported:
+                    self.epaper_device.displayPartBaseImage(buffer_data)
+                    self.partial_refresh_base_initialized = True
+                    self.partial_refresh_count = 0
+                    logger.info("Full refresh completed with new partial-refresh base image")
+                else:
+                    self.epaper_device.display(buffer_data)
+                    logger.info("Full refresh completed")
+
+            self._remember_buffer(buffer_data)
+            self.epaper_device.sleep()
 
         except Exception as e:
             logger.error(f"Display update error: {e}", exc_info=True)
+            self.partial_refresh_base_initialized = False
+            self.partial_refresh_count = 0
 
-    # メインループ
     def start_continuous_display_updates(self):
         logger.info(f"Starting continuous display updates (update interval: {self.system_config.display_update_interval_seconds} seconds)")
         while True:
