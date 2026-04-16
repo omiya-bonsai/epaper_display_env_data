@@ -3,11 +3,11 @@
 # -----------------------------------------------------------------------------
 # 表示内容:
 #
-# 1. ENV4 Temperature + gauge
-# 2. ENV4 Humidity    + gauge
-# 3. ENV3 Temperature + gauge
-# 4. ENV3 Humidity    + gauge
-# 5. ENV4 Pressure / ENV3 Pressure
+# 1. E4 Temperature + gauge
+# 2. E3 Temperature + gauge
+# 3. E4 Humidity    + gauge
+# 4. E3 Humidity    + gauge
+# 5. E4 Pressure / E3 Pressure
 #
 # MQTT:
 #   home/env/env4/raw
@@ -20,6 +20,11 @@
 # - partial refresh対応
 # - unchanged image skip
 # - test mode対応
+#
+# 注意:
+# - 温度・湿度は「受信停止」+「値固定」で ERROR 判定
+# - 気圧は「受信停止」のみで ERROR 判定
+#   （気圧は長時間ほぼ一定でも正常なため）
 # =============================================================================
 
 from dataclasses import dataclass
@@ -310,7 +315,12 @@ class EnvironmentalDataDisplaySystem:
     # Utility
     # -------------------------------------------------------------------------
 
-    def _is_error(self, value: Optional[float], last_received_ts: Optional[float], last_changed_ts: Optional[float]) -> bool:
+    def _is_error(
+        self,
+        value: Optional[float],
+        last_received_ts: Optional[float],
+        last_changed_ts: Optional[float]
+    ) -> bool:
         now = time.time()
 
         stale_by_no_receive = (
@@ -324,7 +334,25 @@ class EnvironmentalDataDisplaySystem:
 
         return value is None or stale_by_no_receive or stale_by_no_change
 
-    def _convert_value_to_gauge_ratio(self, sensor_value: float, gauge_range: SensorGaugeRange) -> float:
+    def _is_pressure_error(
+        self,
+        value: Optional[float],
+        last_received_ts: Optional[float]
+    ) -> bool:
+        now = time.time()
+
+        stale_by_no_receive = (
+            last_received_ts is None
+            or (now - last_received_ts) >= DATA_STALENESS_THRESHOLD_SECONDS
+        )
+
+        return value is None or stale_by_no_receive
+
+    def _convert_value_to_gauge_ratio(
+        self,
+        sensor_value: float,
+        gauge_range: SensorGaugeRange
+    ) -> float:
         value_range = gauge_range.maximum_value - gauge_range.minimum_value
         if value_range == 0:
             return 0.0
@@ -352,7 +380,13 @@ class EnvironmentalDataDisplaySystem:
                 width=1
             )
 
-    def _fit_text(self, drawing_context: ImageDraw.ImageDraw, font: ImageFont.ImageFont, text: str, max_width: int) -> str:
+    def _fit_text(
+        self,
+        drawing_context: ImageDraw.ImageDraw,
+        font: ImageFont.ImageFont,
+        text: str,
+        max_width: int
+    ) -> str:
         try:
             bbox = drawing_context.textbbox((0, 0), text, font=font)
             width = bbox[2] - bbox[0]
@@ -387,7 +421,13 @@ class EnvironmentalDataDisplaySystem:
     # Line builders
     # -------------------------------------------------------------------------
 
-    def _build_temp_or_humidity_line(self, node: dict, prefix: str, field_name: str, unit: str) -> tuple[str, Optional[float], Optional[SensorGaugeRange], bool]:
+    def _build_temp_or_humidity_line(
+        self,
+        node: dict,
+        prefix: str,
+        field_name: str,
+        unit: str
+    ) -> tuple[str, Optional[float], Optional[SensorGaugeRange], bool]:
         value = node[field_name]
         last_received_ts = node["last_received_timestamp"]
         last_changed_ts = node[f"{field_name}_last_changed_timestamp"]
@@ -401,34 +441,14 @@ class EnvironmentalDataDisplaySystem:
         text = f"{prefix}{value:5.1f}{unit}"
         return text, value, gauge_range, False
 
-    # def _build_pressure_line(self) -> str:
-    #     with data_lock:
-    #         env4_error = self._is_error(
-    #             env4["pressure"],
-    #             env4["last_received_timestamp"],
-    #             env4["pressure_last_changed_timestamp"],
-    #         )
-    #         env3_error = self._is_error(
-    #             env3["pressure"],
-    #             env3["last_received_timestamp"],
-    #             env3["pressure_last_changed_timestamp"],
-    #         )
-    #
-    #         env4_text = "ERROR" if env4_error else f"{env4['pressure']:.1f}"
-    #         env3_text = "ERROR" if env3_error else f"{env3['pressure']:.1f}"
-    #
-    #         return f"E4 P:{env4_text} / E3 P:{env3_text}hPa"
-    
     def _build_pressure_line(self) -> str:
-        env4_error = self._is_error(
+        env4_error = self._is_pressure_error(
             env4["pressure"],
             env4["last_received_timestamp"],
-            env4["pressure_last_changed_timestamp"],
         )
-        env3_error = self._is_error(
+        env3_error = self._is_pressure_error(
             env3["pressure"],
             env3["last_received_timestamp"],
-            env3["pressure_last_changed_timestamp"],
         )
 
         env4_text = "ERROR" if env4_error else f"{env4['pressure']:.1f}"
@@ -436,13 +456,15 @@ class EnvironmentalDataDisplaySystem:
 
         return f"E4: {env4_text} / E3: {env3_text}"
 
-
-
     # -------------------------------------------------------------------------
     # Rendering
     # -------------------------------------------------------------------------
 
-    def _create_display_image_for_epaper(self, epaper_device, display_font: ImageFont.ImageFont) -> Image.Image:
+    def _create_display_image_for_epaper(
+        self,
+        epaper_device,
+        display_font: ImageFont.ImageFont
+    ) -> Image.Image:
         image_size = (250, 122) if epaper_device is None else (epaper_device.height, epaper_device.width)
 
         display_image = Image.new("1", image_size, 255)
@@ -466,7 +488,12 @@ class EnvironmentalDataDisplaySystem:
 
             text, value, gauge_range, is_error = line_spec
             fitted_text = self._fit_text(drawing_context, display_font, text, max_text_width)
-            drawing_context.text((layout.text_area_start_x, gauge_y), fitted_text, font=display_font, fill=0)
+            drawing_context.text(
+                (layout.text_area_start_x, gauge_y),
+                fitted_text,
+                font=display_font,
+                fill=0
+            )
 
             if not is_error and value is not None and gauge_range is not None:
                 self._draw_gauge_bar_with_vertical_lines(
@@ -479,7 +506,10 @@ class EnvironmentalDataDisplaySystem:
                 )
 
             drawing_context.line(
-                [(0, y_pos + layout.single_section_height), (image_size[0], y_pos + layout.single_section_height)],
+                [
+                    (0, y_pos + layout.single_section_height),
+                    (image_size[0], y_pos + layout.single_section_height)
+                ],
                 fill=0
             )
 
@@ -493,7 +523,12 @@ class EnvironmentalDataDisplaySystem:
             pressure_line,
             max_text_width,
         )
-        drawing_context.text((layout.text_area_start_x, gauge_y), fitted_pressure_text, font=display_font, fill=0)
+        drawing_context.text(
+            (layout.text_area_start_x, gauge_y),
+            fitted_pressure_text,
+            font=display_font,
+            fill=0
+        )
 
         return display_image.rotate(90, expand=True)
 
@@ -509,7 +544,7 @@ class EnvironmentalDataDisplaySystem:
                     DISPLAY_FONT_SIZE_PIXELS
                 )
             except OSError:
-                logger.warning("Specified font not found. Using default[118;1:3u font.")
+                logger.warning("Specified font not found. Using default font.")
                 font = ImageFont.load_default()
 
             display_image = self._create_display_image_for_epaper(self.epaper_device, font)
