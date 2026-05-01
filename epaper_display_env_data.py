@@ -1,24 +1,22 @@
 # =============================================================================
-# e-Paper ENV3 / ENV4 + Indoor Monitor
+# e-Paper Outdoor Aggregate + Indoor Monitor
 # -----------------------------------------------------------------------------
 # Display:
 #
-# 1. Temperature  (env4 main + delta env3-env4)
-# 2. Humidity     (env4 main + delta env3-env4)
-# 3. Pressure     (env4 main + delta env3-env4)
-# 4. IN THI / E4 THI   (highlight with inversion when ventilation is beneficial)
-# 5. VENT action line (English)
+# 1. Outdoor Temperature  (aggregate median/average/single + spread)
+# 2. Outdoor Humidity     (aggregate + spread warning)
+# 3. Outdoor Pressure     (aggregate + spread)
+# 4. IN THI / OUT THI     (highlight when ventilation is beneficial)
+# 5. VENT action line
 #
 # MQTT:
-#   home/env/env4/raw
-#   home/env/env3/raw
+#   home/env/aggregate/raw
 #   sensor_data
 #
 # Notes:
-# - Temperature / Humidity use both "no receive" and "no change" checks
-# - Pressure uses only "no receive" check
-# - Line 5 uses CO2 + dew point + THI for a simple ventilation decision
-# - Partial refresh can be enabled / disabled from .env
+# - Outdoor values use aggregate from ENV3 / ENV4 / ENVPRO
+# - active_nodes / method / spread / anomaly are displayed or used internally
+# - Indoor values come from Pico W sensor_data
 # =============================================================================
 
 from typing import Optional, Tuple
@@ -56,8 +54,10 @@ MQTT_BROKER_IP_ADDRESS = os.getenv("MQTT_BROKER_IP_ADDRESS", "192.168.3.82")
 MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
 MQTT_KEEPALIVE = int(os.getenv("MQTT_KEEPALIVE", "60"))
 
-MQTT_TOPIC_ENV3 = os.getenv("MQTT_TOPIC_ENV3", "home/env/env3/raw")
-MQTT_TOPIC_ENV4 = os.getenv("MQTT_TOPIC_ENV4", "home/env/env4/raw")
+MQTT_TOPIC_AGGREGATE = os.getenv(
+    "MQTT_TOPIC_AGGREGATE",
+    "home/env/aggregate/raw"
+)
 MQTT_TOPIC_SENSOR_DATA = os.getenv("MQTT_TOPIC_SENSOR_DATA", "sensor_data")
 
 INDOOR_DEVICE_ID = os.getenv("INDOOR_DEVICE_ID", "pico_w_production")
@@ -70,8 +70,7 @@ NO_CHANGE_ERROR_THRESHOLD_SECONDS = int(
 )
 
 BASE_DIRECTORY = os.getenv("BASE_DIRECTORY", "./data")
-ENV3_FILE_PATH = os.path.join(BASE_DIRECTORY, "env3.json")
-ENV4_FILE_PATH = os.path.join(BASE_DIRECTORY, "env4.json")
+OUTDOOR_FILE_PATH = os.path.join(BASE_DIRECTORY, "outdoor_aggregate.json")
 INDOOR_FILE_PATH = os.path.join(BASE_DIRECTORY, "indoor.json")
 
 EPAPER_DISPLAY_TYPE = os.getenv("EPAPER_DISPLAY_TYPE", "epd2in13_V4")
@@ -100,9 +99,9 @@ THI_HIGHLIGHT_THRESHOLD = float(
     os.getenv("THI_HIGHLIGHT_THRESHOLD", "3.0")
 )
 
-DELTA_TEMP_WARN = float(os.getenv("DELTA_TEMP_WARN", "0.5"))
-DELTA_HUM_WARN = float(os.getenv("DELTA_HUM_WARN", "3.0"))
-DELTA_PRESS_WARN = float(os.getenv("DELTA_PRESS_WARN", "1.0"))
+SPREAD_TEMP_WARN = float(os.getenv("SPREAD_TEMP_WARN", "2.0"))
+SPREAD_HUM_WARN = float(os.getenv("SPREAD_HUM_WARN", "8.0"))
+SPREAD_PRESS_WARN = float(os.getenv("SPREAD_PRESS_WARN", "3.0"))
 
 # -----------------------------------------------------------------------------
 # SHARED STATE
@@ -110,20 +109,19 @@ DELTA_PRESS_WARN = float(os.getenv("DELTA_PRESS_WARN", "1.0"))
 
 data_lock = threading.Lock()
 
-env3 = {
+outdoor = {
     "temperature": None,
     "humidity": None,
     "pressure": None,
-    "last_received_timestamp": None,
-    "temperature_last_changed_timestamp": None,
-    "humidity_last_changed_timestamp": None,
-    "pressure_last_changed_timestamp": None,
-}
 
-env4 = {
-    "temperature": None,
-    "humidity": None,
-    "pressure": None,
+    "active_nodes": None,
+    "method": None,
+    "anomaly_status": None,
+
+    "temperature_spread": None,
+    "humidity_spread": None,
+    "pressure_spread": None,
+
     "last_received_timestamp": None,
     "temperature_last_changed_timestamp": None,
     "humidity_last_changed_timestamp": None,
@@ -176,17 +174,13 @@ def load_data_from_json_file(file_path: str) -> dict:
 
 
 def restore_cached_data():
-    global env3, env4, indoor
+    global outdoor, indoor
 
     os.makedirs(BASE_DIRECTORY, exist_ok=True)
 
-    env3_loaded = load_data_from_json_file(ENV3_FILE_PATH)
-    if env3_loaded:
-        env3.update(env3_loaded)
-
-    env4_loaded = load_data_from_json_file(ENV4_FILE_PATH)
-    if env4_loaded:
-        env4.update(env4_loaded)
+    outdoor_loaded = load_data_from_json_file(OUTDOOR_FILE_PATH)
+    if outdoor_loaded:
+        outdoor.update(outdoor_loaded)
 
     indoor_loaded = load_data_from_json_file(INDOOR_FILE_PATH)
     if indoor_loaded:
@@ -200,11 +194,9 @@ def restore_cached_data():
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         logger.info("MQTT connected successfully")
-        client.subscribe(MQTT_TOPIC_ENV3)
-        client.subscribe(MQTT_TOPIC_ENV4)
+        client.subscribe(MQTT_TOPIC_AGGREGATE)
         client.subscribe(MQTT_TOPIC_SENSOR_DATA)
-        logger.info(f"Subscribed: {MQTT_TOPIC_ENV3}")
-        logger.info(f"Subscribed: {MQTT_TOPIC_ENV4}")
+        logger.info(f"Subscribed: {MQTT_TOPIC_AGGREGATE}")
         logger.info(f"Subscribed: {MQTT_TOPIC_SENSOR_DATA}")
     else:
         logger.error(f"MQTT connection failed: rc={rc}")
@@ -230,6 +222,29 @@ def update_env_state(target: dict, payload: dict, received_timestamp: float):
         target["pressure"] = new_pressure
 
     target["last_received_timestamp"] = received_timestamp
+
+
+def update_outdoor_state(target: dict, payload: dict, received_timestamp: float):
+    update_env_state(target, payload, received_timestamp)
+
+    target["active_nodes"] = payload.get("active_nodes")
+    target["method"] = payload.get("method")
+
+    anomaly = payload.get("anomaly", {})
+    if isinstance(anomaly, dict):
+        target["anomaly_status"] = anomaly.get("status")
+    else:
+        target["anomaly_status"] = payload.get("status")
+
+    spread = payload.get("spread", {})
+    if isinstance(spread, dict):
+        target["temperature_spread"] = spread.get("temperature")
+        target["humidity_spread"] = spread.get("humidity")
+        target["pressure_spread"] = spread.get("pressure")
+    else:
+        target["temperature_spread"] = None
+        target["humidity_spread"] = None
+        target["pressure_spread"] = None
 
 
 def update_indoor_state(target: dict, payload: dict, received_timestamp: float):
@@ -261,7 +276,7 @@ def update_indoor_state(target: dict, payload: dict, received_timestamp: float):
 
 
 def on_message(client, userdata, msg):
-    global env3, env4, indoor
+    global outdoor, indoor
 
     received_timestamp = time.time()
 
@@ -270,20 +285,17 @@ def on_message(client, userdata, msg):
         payload = json.loads(payload_str)
 
         with data_lock:
-            if msg.topic == MQTT_TOPIC_ENV3:
-                update_env_state(env3, payload, received_timestamp)
-                save_data_to_json_file(ENV3_FILE_PATH, env3)
+            if msg.topic == MQTT_TOPIC_AGGREGATE:
+                update_outdoor_state(outdoor, payload, received_timestamp)
+                save_data_to_json_file(OUTDOOR_FILE_PATH, outdoor)
                 logger.info(
-                    f"ENV3 received: T={env3['temperature']} "
-                    f"H={env3['humidity']} P={env3['pressure']}"
-                )
-
-            elif msg.topic == MQTT_TOPIC_ENV4:
-                update_env_state(env4, payload, received_timestamp)
-                save_data_to_json_file(ENV4_FILE_PATH, env4)
-                logger.info(
-                    f"ENV4 received: T={env4['temperature']} "
-                    f"H={env4['humidity']} P={env4['pressure']}"
+                    f"OUTDOOR aggregate received: "
+                    f"T={outdoor['temperature']} "
+                    f"H={outdoor['humidity']} "
+                    f"P={outdoor['pressure']} "
+                    f"N={outdoor['active_nodes']} "
+                    f"M={outdoor['method']} "
+                    f"STATUS={outdoor['anomaly_status']}"
                 )
 
             elif msg.topic == MQTT_TOPIC_SENSOR_DATA:
@@ -368,7 +380,7 @@ class EnvironmentalDataDisplaySystem:
         value: Optional[float],
         last_received_ts: Optional[float],
         last_changed_ts: Optional[float]
-    ) -> bool:
+    ) -[118;1:3u> bool:
         now = time.time()
 
         stale_by_no_receive = (
@@ -452,82 +464,86 @@ class EnvironmentalDataDisplaySystem:
         except Exception:
             return None
 
+    def _method_short(self, method: Optional[str]) -> str:
+        if method == "median":
+            return "m"
+        if method == "average":
+            return "a"
+        if method == "single_node":
+            return "s"
+        if method == "unavailable":
+            return "x"
+        return "?"
+
+    def _status_mark(self, status: Optional[str]) -> str:
+        if status == "ok":
+            return "OK"
+        if status == "warn":
+            return "W"
+        if status == "critical":
+            return "C"
+        if status == "insufficient_nodes":
+            return "N"
+        if status == "unavailable":
+            return "X"
+        return "?"
+
     # -------------------------------------------------------------------------
     # Line builders
     # -------------------------------------------------------------------------
 
-    def _fmt_dynamic_delta_line(
-        self,
-        label: str,
-        e4_value: Optional[float],
-        e4_last_received_ts: Optional[float],
-        e4_last_changed_ts: Optional[float],
-        e3_value: Optional[float],
-        e3_last_received_ts: Optional[float],
-        e3_last_changed_ts: Optional[float],
-        unit: str,
-        warn_threshold: float,
-    ) -> str:
-        e4_error = self._is_error(e4_value, e4_last_received_ts, e4_last_changed_ts)
-        e3_error = self._is_error(e3_value, e3_last_received_ts, e3_last_changed_ts)
-
-        if e4_error:
-            return f"{label} ERROR"
-
-        if e3_error:
-            return f"{label} {e4_value:.1f}{unit} ?"
-
-        delta = round(e3_value - e4_value, 1)
-        warn = "!" if abs(delta) >= warn_threshold else " "
-
-        return f"{label} {e4_value:.1f}{unit} {warn}{delta:+.1f}"
-
     def _build_temperature_line(self) -> str:
-        return self._fmt_dynamic_delta_line(
-            "Temp:",
-            env4["temperature"],
-            env4["last_received_timestamp"],
-            env4["temperature_last_changed_timestamp"],
-            env3["temperature"],
-            env3["last_received_timestamp"],
-            env3["temperature_last_changed_timestamp"],
-            "°C",
-            DELTA_TEMP_WARN,
+        if self._is_error(
+            outdoor["temperature"],
+            outdoor["last_received_timestamp"],
+            outdoor["temperature_last_changed_timestamp"],
+        ):
+            return "Temp: ERROR"
+
+        spread = outdoor.get("temperature_spread")
+        active = outdoor.get("active_nodes")
+        method = self._method_short(outdoor.get("method"))
+
+        spread_warn = "!" if spread is not None and spread >= SPREAD_TEMP_WARN else " "
+        spread_text = "?" if spread is None else f"{spread:.1f}"
+
+        return (
+            f"Temp: {outdoor['temperature']:.1f}°C "
+            f"n{active if active is not None else '?'} {method} "
+            f"{spread_warn}d{spread_text}"
         )
 
     def _build_humidity_line(self) -> str:
-        return self._fmt_dynamic_delta_line(
-            "Hum:",
-            env4["humidity"],
-            env4["last_received_timestamp"],
-            env4["humidity_last_changed_timestamp"],
-            env3["humidity"],
-            env3["last_received_timestamp"],
-            env3["humidity_last_changed_timestamp"],
-            "%",
-            DELTA_HUM_WARN,
+        if self._is_error(
+            outdoor["humidity"],
+            outdoor["last_received_timestamp"],
+            outdoor["humidity_last_changed_timestamp"],
+        ):
+            return "Hum: ERROR"
+
+        spread = outdoor.get("humidity_spread")
+        status = self._status_mark(outdoor.get("anomaly_status"))
+
+        spread_warn = "!" if spread is not None and spread >= SPREAD_HUM_WARN else " "
+        spread_text = "?" if spread is None else f"{spread:.1f}"
+
+        return (
+            f"Hum: {outdoor['humidity']:.1f}% "
+            f"{spread_warn}d{spread_text} {status}"
         )
 
     def _build_pressure_line(self) -> str:
-        env4_error = self._is_pressure_error(
-            env4["pressure"],
-            env4["last_received_timestamp"],
-        )
-        env3_error = self._is_pressure_error(
-            env3["pressure"],
-            env3["last_received_timestamp"],
-        )
-
-        if env4_error:
+        if self._is_pressure_error(
+            outdoor["pressure"],
+            outdoor["last_received_timestamp"],
+        ):
             return "Press: ERROR"
 
-        if env3_error:
-            return f"Press: {env4['pressure']:.1f} ?"
+        spread = outdoor.get("pressure_spread")
+        spread_warn = "!" if spread is not None and spread >= SPREAD_PRESS_WARN else " "
+        spread_text = "?" if spread is None else f"{spread:.1f}"
 
-        delta = round(env3["pressure"] - env4["pressure"], 1)
-        warn = "!" if abs(delta) >= DELTA_PRESS_WARN else " "
-
-        return f"Press: {env4['pressure']:.1f} {warn}{delta:+.1f}"
+        return f"Press: {outdoor['pressure']:.1f} {spread_warn}d{spread_text}"
 
     def _build_thi_line(self) -> Tuple[str, bool]:
         indoor_error = self._is_error(
@@ -536,37 +552,37 @@ class EnvironmentalDataDisplaySystem:
             indoor["thi_last_changed_timestamp"],
         )
 
-        e4_thi = self._calc_thi(env4["temperature"], env4["humidity"])
-        e4_error = self._is_error(
-            e4_thi,
-            env4["last_received_timestamp"],
-            env4["humidity_last_changed_timestamp"],
+        outdoor_thi = self._calc_thi(outdoor["temperature"], outdoor["humidity"])
+        outdoor_error = self._is_error(
+            outdoor_thi,
+            outdoor["last_received_timestamp"],
+            outdoor["humidity_last_changed_timestamp"],
         )
 
         indoor_text = "ERROR" if indoor_error else f"{indoor['thi']:.1f}"
-        e4_text = "ERROR" if e4_error or e4_thi is None else f"{e4_thi:.1f}"
+        outdoor_text = "ERROR" if outdoor_error or outdoor_thi is None else f"{outdoor_thi:.1f}"
 
-        if indoor_error or e4_error or e4_thi is None or indoor["thi"] is None:
-            return f"THI IN:{indoor_text} ? E4:{e4_text}", False
+        if indoor_error or outdoor_error or outdoor_thi is None or indoor["thi"] is None:
+            return f"THI IN:{indoor_text} ? OUT:{outdoor_text}", False
 
-        if indoor["thi"] > e4_thi:
+        if indoor["thi"] > outdoor_thi:
             symbol = ">"
-        elif indoor["thi"] < e4_thi:
+        elif indoor["thi"] < outdoor_thi:
             symbol = "<"
         else:
             symbol = "="
 
-        delta_thi = indoor["thi"] - e4_thi
+        delta_thi = indoor["thi"] - outdoor_thi
         ventilation_beneficial = delta_thi >= THI_HIGHLIGHT_THRESHOLD
 
-        return f"THI IN:{indoor_text} {symbol} E4:{e4_text}", ventilation_beneficial
+        return f"THI IN:{indoor_text} {symbol} OUT:{outdoor_text}", ventilation_beneficial
 
     def _build_ventilation_line(self) -> str:
         indoor_co2 = indoor["co2"]
         indoor_temp = indoor["temperature"]
         indoor_hum = indoor["humidity"]
-        outdoor_temp = env4["temperature"]
-        outdoor_hum = env4["humidity"]
+        outdoor_temp = outdoor["temperature"]
+        outdoor_hum = outdoor["humidity"]
 
         indoor_temp_error = self._is_error(
             indoor_temp,
@@ -586,13 +602,13 @@ class EnvironmentalDataDisplaySystem:
 
         outdoor_temp_error = self._is_error(
             outdoor_temp,
-            env4["last_received_timestamp"],
-            env4["temperature_last_changed_timestamp"],
+            outdoor["last_received_timestamp"],
+            outdoor["temperature_last_changed_timestamp"],
         )
         outdoor_hum_error = self._is_error(
             outdoor_hum,
-            env4["last_received_timestamp"],
-            env4["humidity_last_changed_timestamp"],
+            outdoor["last_received_timestamp"],
+            outdoor["humidity_last_changed_timestamp"],
         )
 
         if indoor_temp_error or indoor_hum_error or outdoor_temp_error or outdoor_hum_error:
@@ -645,7 +661,11 @@ class EnvironmentalDataDisplaySystem:
         epaper_device,
         display_font: ImageFont.ImageFont
     ) -> Image.Image:
-        image_size = (250, 122) if epaper_device is None else (epaper_device.height, epaper_device.width)
+        image_size = (
+            (250, 122)
+            if epaper_device is None
+            else (epaper_device.height, epaper_device.width)
+        )
 
         display_image = Image.new("1", image_size, 255)
         drawing_context = ImageDraw.Draw(display_image)
@@ -807,14 +827,14 @@ class EnvironmentalDataDisplaySystem:
 
 def main():
     try:
-        logger.info("Starting ENV3 / ENV4 display system...")
+        logger.info("Starting outdoor aggregate display system...")
         display_system = EnvironmentalDataDisplaySystem()
         logger.info("System initialization completed")
         display_system.start_continuous_display_updates()
     except Exception as e:
         logger.error(f"System startup error: {e}", exc_info=True)
     finally:
-        logger.info("ENV3 / ENV4 display system terminated")
+        logger.info("Outdoor aggregate display system terminated")
 
 
 if __name__ == "__main__":
