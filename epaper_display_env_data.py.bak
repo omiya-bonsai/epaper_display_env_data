@@ -411,7 +411,7 @@ class EnvironmentalDataDisplaySystem:
     def _fit_text(
         self,
         drawing_context: ImageDraw.ImageDraw,
-        font: ImageFont.ImageFont,
+        font: ImageFont.ImageFont
         text: str,
         max_width: int
     ) -> str:
