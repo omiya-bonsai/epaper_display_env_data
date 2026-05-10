@@ -27,3 +27,4 @@ __pycache__/
 
 
 scan_secrets.sh
+waveshare_epd/
